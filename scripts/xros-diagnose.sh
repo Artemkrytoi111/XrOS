@@ -194,6 +194,19 @@ if grep -B 2 -A 10 '+ label' profile/grub/theme/theme.txt | grep -q 'id = "__tim
 else
   bad "theme.txt: нет label __timeout__ с @TIMEOUT@"
 fi
+# fixed5 (10.11.2026): id "__timeout__" должен быть РОВНО ОДИН на весь
+# theme.txt. В fixed4 их было два (progress_bar + label) — GRUB обновлял
+# только первый (progress_bar), и label показывал литерал «@TIMEOUT@».
+if [ "$(grep -c 'id = "__timeout__"' profile/grub/theme/theme.txt)" -eq 1 ]; then
+  ok "theme.txt: id __timeout__ ровно один (GRUB подставит число в label)"
+else
+  bad "theme.txt: id __timeout__ не один (найдено: $(grep -c 'id = "__timeout__"' profile/grub/theme/theme.txt)) — GRUB обновит только первый, будет литерал"
+fi
+if grep -q '+ progress_bar' profile/grub/theme/theme.txt; then
+  bad "theme.txt: есть progress_bar (fixed5: удалён — он перехватывал id __timeout__)"
+else
+  ok "theme.txt: progress_bar нет (не перехватывает __timeout__)"
+fi
 if grep -oP 'menuentry "\K[^"]+' profile/grub/grub.cfg | sed 's/%ARCH%/x86_64/g; s/${archiso_platform}/UEFI/g' | while IFS= read -r _l; do [ "$(printf '%s' "$_l" | LC_ALL=C.UTF-8 wc -m)" -gt 30 ] && echo "$_l"; done | grep -q .; then
   bad "grub.cfg: есть пункт меню длиннее 30 символов (обрежется pixmap)"
 else
@@ -449,6 +462,10 @@ for marker in '"Desktop"' '"Finish"' 'reboot_now' 'XrOS успешно уста�
 done
 if grep -q 'CancelClose' src/xros-install-gui-rs/src/app.rs; then ok "gui: запрет закрытия окна во время установки (CancelClose)"; else bad "gui: нет CancelClose"; fi
 if grep -q 'start_step.min(STEPS.len() - 2)' src/xros-install-gui-rs/src/app.rs; then ok "gui: --step ограничен шагом 8 (Finish недоступен напрямую)"; else bad "gui: --step не ограничен"; fi
+# fixed5 (10.11.2026): окно установщика открывается развёрнутым —
+# без этого KWin ставил 960x600 со смещением (x≈475 при 1280x800),
+# и кнопки «Назад»/«Продолжить» оказывались за экраном.
+if grep -q 'with_maximized(true)' src/xros-install-gui-rs/src/main.rs; then ok "gui: окно открывается развёрнутым (with_maximized)"; else bad "gui: нет with_maximized — окно может открыться за экраном"; fi
 if grep -q 'mode(0o600)' src/xros-install-gui-rs/src/install.rs; then ok "gui: конфиг установки 0600 с момента создания"; else bad "gui: конфиг установки не 0600"; fi
 if grep -q 'add_enabled(!self.installing' src/xros-install-gui-rs/src/app.rs; then ok "gui: кнопки навигации блокируются во время установки"; else bad "gui: навигация не блокируется во время установки"; fi
 
