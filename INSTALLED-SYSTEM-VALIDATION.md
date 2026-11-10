@@ -129,7 +129,47 @@ KEYMAP=ru, DE=kde, OFFICE=none. Установка движком `xros-install`
   `fixed5-uefi-inst3-inst3-boot1.png`)
 - Ожидание рабочего стола — результат будет дописан после проверки.
 
-## 4. Итог по установленной системе (промежуточный)
+## 5. fixed6 — исправления и тест Live-системы (2026-11-11 ~23:00 UTC)
+
+Собрана fixed6 (plain `4c7cb6b7c47d996c81d1755045da446a1bfff5540ead1439dada8ae02c6af1dd`,
+hybrid `ea2d334e1a2dc979d4c3660e58ff93ba84d6e39ff77e31cf7ee4bfae5380bffd`;
+diagnose PASS=239 FAIL=0 SKIP=13; check-iso PASS=10 FAIL=0 SKIP=2;
+коммит `02a974d`, запушено в main). Включает 4 фикса:
+1. Drop-in `plasma-plasmashell.service.d/10-kactivitymanagerd.conf`
+   (`Wants=`+`After=plasma-kactivitymanagerd.service`) — против гонки §2.3.
+2. GRUB: обратный отсчёт — `progress_bar` с `id="__timeout__"` и текстом
+   `@TIMEOUT@` (label с @TIMEOUT@ удалён; fixed5-label показывал литерал).
+3. Движок: fallback `\EFI\BOOT\BOOTX64.EFI` после UEFI grub-install.
+4. Движок: журнал создаётся ПОСЛЕ sudo re-exec (был xros-owned 600,
+   root не мог дописать — ложный «sgdisk не удался»).
+
+**Тест Live fixed6 (UEFI GRUB, прогон fixed6-uefi-grub, pid 22238):**
+- Приветствие «Добро пожаловать в XrOS!» открывается — PASS.
+- Konsole (Ctrl+Alt+T) работает — PASS (промпт `[xros@xros-os ~]$`).
+- **НО: рабочий стол чёрный — обои, панель, значок «Установить XrOS» НЕ
+  отображаются (после Alt+F4 и через 10+ мин). РЕГРЕССИЯ относительно
+  fixed5 (там Live-рабочий стол работал).**
+- В Konsole: `plasmashell` (pid 727, **4:22 CPU** — busy loop),
+  `kactivitymanagerd` (pid 759) — ОБА запущены. `journalctl --user -b |
+  grep -i abort` — сообщения «Aborting shell load» НЕТ (только фрагмент
+  стека `abort (libc.so.6)`). То есть причина НЕ та же гонка, что в
+  установленной системе fixed5.
+- `systemctl --user restart plasma-plasmashell` — «Unit
+  plasma-plasmashell.service not found» (в Live-сессии plasmashell
+  запускается через `startplasma-wayland`, а не через systemd — это может
+  быть нормой, а не признаком поломки).
+- Drop-in в живой системе ПРИСУТСТВУЕТ
+  (`/etc/systemd/user/plasma-plasmashell.service.d/` виден в `ls`).
+  Подозрение на drop-in как причину регрессии — НЕ ДОКАЗАНО (Live-сессия
+  не использует systemd-юнит plasmashell напрямую).
+- GRUB-меню fixed6 поймать не удалось (таймаут 10 с, скриншот поздний);
+  проверка progress_bar с числом — НЕ ВЫПОЛНЕНА.
+- Установка fixed6 и первая загрузка установленной системы — НЕ ТЕСТИРОВАЛИСЬ.
+
+**Статус fixed6: НЕ ГОТОВА к объявлению исправленной.** Требуется:
+откатить/перепроверить drop-in (fixed7) либо установить точную причину
+чёрного Live-стола fixed6 (busy loop plasmashell, 4:22 CPU) и только затем
+повторить установку и первую загрузку установленной системы.
 
 | Критерий | Статус |
 |---|---|
