@@ -226,6 +226,16 @@ echo "Все 4 пакета собраны"
 
 # --- шаг 7: репозиторий ------------------------------------------------------------
 step "Обновление локального репозитория (repo-add в build-env)"
+# Свежие пакеты из packages/ кладутся в repo/ ДО repo-add: без этого
+# repo-add переиндексировал старые файлы, и в репозитории (и в его снимке
+# на ISO) оставались пакеты прошлой сборки.
+REPO_DIR="$ROOT/repo/xros/os/x86_64"
+for pkg in xros-cli xros-installer xros-welcome xros-branding; do
+    rm -f "$REPO_DIR/$pkg"-[0-9]*.pkg.tar.zst
+    cp "$ROOT/packages/$pkg"/*.pkg.tar.zst "$REPO_DIR/" \
+        || die "не удалось скопировать пакет $pkg в repo/"
+done
+rm -f "$REPO_DIR"/xros.db* "$REPO_DIR"/xros.files*
 "$BUILD_ENV" --exec -- bash -c 'cd /xros/repo/xros/os/x86_64 && repo-add xros.db.tar.gz *.pkg.tar.zst' \
     || die "repo-add не удался"
 ls "$ROOT/repo/xros/os/x86_64/xros.db.tar.gz" >/dev/null \
@@ -277,10 +287,11 @@ MK_LOG="$OUT/mkarchiso.log"
 "$BUILD_ENV" --exec -- mkarchiso -v -w /xros/work -o /xros/out /xros/profile >"$MK_LOG" 2>&1 \
     || { tail -30 "$MK_LOG" >&2; die "mkarchiso не удался (лог: $MK_LOG). Если падение — на pacstrap полного списка (Write failed + EPERM), СТОП: разобрать причину, ручной pacstrap и маркеры base.* — только с явного разрешения, см. шапку файла."; }
 echo "mkarchiso завершён (лог: $MK_LOG)"
-ISO="$(ls "$OUT"/xros-*.iso 2>/dev/null | grep -v -e '-hybrid\.iso$' | head -1)"
-[[ -n "$ISO" ]] || die "mkarchiso не создал ISO в $OUT"
-[[ "$(ls "$OUT"/xros-*.iso 2>/dev/null | grep -v -e '-hybrid\.iso$' | wc -l)" -eq 1 ]] \
+mapfile -t ISOS < <(find "$OUT" -maxdepth 1 -name 'xros-*.iso' ! -name '*-hybrid.iso' | sort)
+[[ "${#ISOS[@]}" -ge 1 ]] || die "mkarchiso не создал ISO в $OUT"
+[[ "${#ISOS[@]}" -eq 1 ]] \
     || die "в $OUT больше одного ISO от mkarchiso — непонятно, какой обрабатывать"
+ISO="${ISOS[0]}"
 echo "ISO от mkarchiso: $ISO ($(stat -c%s "$ISO") Б)"
 
 # --- шаг 11: постобработка BIOS-GRUB --------------------------------------------------

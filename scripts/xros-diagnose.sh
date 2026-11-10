@@ -15,7 +15,7 @@ ok()   { echo "PASS  $1"; PASS=$((PASS+1)); }
 bad()  { echo "FAIL  $1"; FAIL=$((FAIL+1)); FAILED+=("$1"); }
 skip() { echo "SKIP  $1 ($2)"; SKIP=$((SKIP+1)); }
 
-cd "$ROOT"
+cd "$ROOT" || exit 1
 
 # ---------------------------------------------------------------- 1. bash -n
 while IFS= read -r -d '' f; do
@@ -28,7 +28,16 @@ done < <(find profile src packages scripts -type f \( -name '*.sh' -o -name 'xro
 if command -v shellcheck >/dev/null 2>&1; then
   sc_fail=0
   while IFS= read -r -d '' f; do
-    shellcheck -S warning "$f" >/dev/null 2>&1 || sc_fail=1
+    case "$f" in
+      # PKGBUILD: без shebang, переменные читает makepkg (SC2034),
+      # srcdir/pkgdir/startdir задаёт он же (SC2154).
+      */PKGBUILD) sc_opts=(-s bash -e "SC2034,SC2154") ;;
+      # xros-install: `2>&1 >/dev/tty` — штатная идиома dialog (SC2069),
+      # source файла с путём из переменной (SC1090).
+      */xros-install) sc_opts=(-e "SC2069,SC1090") ;;
+      *) sc_opts=() ;;
+    esac
+    shellcheck -S warning "${sc_opts[@]}" "$f" || sc_fail=1
   done < <(find profile src packages scripts -type f \( -name '*.sh' -o -name 'xros-install' -o -name 'xros-welcome' -o -name 'PKGBUILD' -o -name 'profiledef.sh' -o -name 'customize_airootfs.sh' \) -print0)
   if [[ $sc_fail -eq 0 ]]; then ok "shellcheck всех bash-файлов"; else bad "shellcheck: есть предупреждения/ошибки"; fi
 else
@@ -647,7 +656,7 @@ if [[ $ph_bad -eq 0 ]]; then ok "xros.example везде с PLACEHOLDER рядо
 # намеренно завершается exit 3) и TODO в mkinitcpio.conf.d/archiso.conf
 # (сверить с пакетом mkinitcpio-archiso) — оба задокументированы,
 # но пока не закрыты, поэтому проверка даёт FAIL, а не SKIP.
-if grep -rniE --exclude-dir=.git --exclude=xros-diagnose.sh 'TODO|FIXME|not implemented|unimplemented' src scripts packages profile 2>/dev/null | grep .; then
+if grep -rniE --exclude-dir=.git --exclude-dir=target --exclude=xros-diagnose.sh 'TODO|FIXME|not implemented|unimplemented' src scripts packages profile 2>/dev/null | grep .; then
   bad "маркеры-заглушки TODO/FIXME/not implemented (см. список выше)"
 else
   ok "маркеров-заглушек нет"
@@ -660,6 +669,7 @@ fi
 # расхождение означает, что пакет в repo/ устарел и нужна
 # пересборка (makepkg + repo-add).
 for p in xros-cli xros-installer xros-welcome xros-branding; do
+  # shellcheck disable=SC2154  # source — массив из PKGBUILD
   if (cd "packages/$p" && source ./PKGBUILD >/dev/null 2>&1 && for s in "${source[@]}"; do [[ -f "$s" ]] || exit 1; done); then
     ok "PKGBUILD $p: все source-файлы на месте"
   else
@@ -725,24 +735,30 @@ if [[ $dup_const -eq 0 ]]; then ok "install.rs: pub const без дублей"; 
 # Время: тесты занимают ~70 с (child-process 28 с + extended 38 с).
 
 # 20а. Build environment: rootfs, маркеры init, builder, версии инструментов.
-if [[ -d build-env/root.x86_64/usr/bin ]]; then ok "build-env: rootfs существует"; else bad "build-env: нет rootfs (нужен scripts/xros-build-env.sh --init)"; fi
-if [[ -f build-env/state/init-done ]]; then ok "build-env: маркер state/init-done"; else bad "build-env: нет state/init-done"; fi
-if [[ -f build-env/state/deps-fetched ]]; then ok "build-env: маркер state/deps-fetched"; else bad "build-env: нет state/deps-fetched"; fi
-if grep -q '^builder:x:1000:1000:' build-env/root.x86_64/etc/passwd 2>/dev/null; then ok "build-env: builder uid 1000 в rootfs"; else bad "build-env: нет builder uid 1000"; fi
-if [[ -f build-env/archlinux-bootstrap-x86_64.tar.zst && -f build-env/archlinux-bootstrap-x86_64.tar.zst.sig ]]; then
-  ok "build-env: bootstrap-тарбол + подпись на месте"
+# build-env/ лежит вне git (.gitignore): на свежем клоне и в CI его нет —
+# это SKIP, а не FAIL. Сама сборка (build.sh) требует rootfs отдельно.
+if [[ -d build-env ]]; then
+  if [[ -d build-env/root.x86_64/usr/bin ]]; then ok "build-env: rootfs существует"; else bad "build-env: нет rootfs (нужен scripts/xros-build-env.sh --init)"; fi
+  if [[ -f build-env/state/init-done ]]; then ok "build-env: маркер state/init-done"; else bad "build-env: нет state/init-done"; fi
+  if [[ -f build-env/state/deps-fetched ]]; then ok "build-env: маркер state/deps-fetched"; else bad "build-env: нет state/deps-fetched"; fi
+  if grep -q '^builder:x:1000:1000:' build-env/root.x86_64/etc/passwd 2>/dev/null; then ok "build-env: builder uid 1000 в rootfs"; else bad "build-env: нет builder uid 1000"; fi
+  if [[ -f build-env/archlinux-bootstrap-x86_64.tar.zst && -f build-env/archlinux-bootstrap-x86_64.tar.zst.sig ]]; then
+    ok "build-env: bootstrap-тарбол + подпись на месте"
+  else
+    bad "build-env: нет bootstrap-тарбола/подписи"
+  fi
+  rootfs_size=$(du -sb build-env/root.x86_64 2>/dev/null | cut -f1)
+  if [[ "${rootfs_size:-0}" -ge 1000000000 ]]; then ok "build-env: rootfs >= 1 ГБ ($((rootfs_size/1024/1024)) МБ)"; else bad "build-env: rootfs подозрительно мал ($((rootfs_size/1024/1024)) МБ)"; fi
+  if benv_ver=$(./scripts/xros-build-env.sh --exec -- bash -c 'rustc --version; cargo --version; grub-install --version | head -1; pacman --version | head -2 | tail -1' 2>/dev/null); then
+    if echo "$benv_ver" | grep -q 'rustc 1.99.1'; then ok "build-env: rustc 1.99.1 в rootfs"; else bad "build-env: rustc не 1.99.1"; fi
+    if echo "$benv_ver" | grep -q 'cargo 1.99.1'; then ok "build-env: cargo 1.99.1 в rootfs"; else bad "build-env: cargo не 1.99.1"; fi
+    if echo "$benv_ver" | grep -q 'GRUB. 2:2.16'; then ok "build-env: GRUB 2.16 в rootfs"; else bad "build-env: GRUB не 2.16"; fi
+    if echo "$benv_ver" | grep -q 'Pacman v7.1.0'; then ok "build-env: pacman 7.1.0 в rootfs"; else bad "build-env: pacman не 7.1.0"; fi
+  else
+    bad "build-env: --exec не работает (нельзя проверить версии инструментов)"
+  fi
 else
-  bad "build-env: нет bootstrap-тарбола/подписи"
-fi
-rootfs_size=$(du -sb build-env/root.x86_64 2>/dev/null | cut -f1)
-if [[ "${rootfs_size:-0}" -ge 1000000000 ]]; then ok "build-env: rootfs >= 1 ГБ ($((rootfs_size/1024/1024)) МБ)"; else bad "build-env: rootfs подозрительно мал ($((rootfs_size/1024/1024)) МБ)"; fi
-if benv_ver=$(./scripts/xros-build-env.sh --exec -- bash -c 'rustc --version; cargo --version; grub-install --version | head -1; pacman --version | head -2 | tail -1' 2>/dev/null); then
-  echo "$benv_ver" | grep -q 'rustc 1.99.1' && ok "build-env: rustc 1.99.1 в rootfs" || bad "build-env: rustc не 1.99.1"
-  echo "$benv_ver" | grep -q 'cargo 1.99.1' && ok "build-env: cargo 1.99.1 в rootfs" || bad "build-env: cargo не 1.99.1"
-  echo "$benv_ver" | grep -q 'GRUB. 2:2.16' && ok "build-env: GRUB 2.16 в rootfs" || bad "build-env: GRUB не 2.16"
-  echo "$benv_ver" | grep -q 'Pacman v7.1.0' && ok "build-env: pacman 7.1.0 в rootfs" || bad "build-env: pacman не 7.1.0"
-else
-  bad "build-env: --exec не работает (нельзя проверить версии инструментов)"
+  skip "build-env: rootfs, маркеры, версии инструментов" "каталога build-env/ нет — он вне git, создаётся scripts/xros-build-env.sh --init"
 fi
 
 # 20б. Независимость от чужих проектов: ссылки на другой проект
@@ -755,22 +771,27 @@ fi
 
 # 20в. BIOS-GRUB: экспериментальный образ и логи QEMU на месте,
 # profiledef по-прежнему без bios.syslinux (вариант Б НЕ внедрён).
+# experiments/ лежит вне git (.gitignore): без него — SKIP, а не FAIL.
 bios_iso="experiments/bios-grub-test/out/xros-bios-test.iso"
-if [[ -f "$bios_iso" ]]; then
-  bios_sha=$(sha256sum "$bios_iso" | cut -d' ' -f1)
-  if [[ "$bios_sha" == "1e29fe9909c673d81a9e42d8312e08454c9ac433b4ff64a8b12da42ad281399d" ]]; then
-    ok "BIOS-GRUB: тестовый ISO на месте, sha256 1e29fe99… совпадает"
+if [[ -d experiments/bios-grub-test ]]; then
+  if [[ -f "$bios_iso" ]]; then
+    bios_sha=$(sha256sum "$bios_iso" | cut -d' ' -f1)
+    if [[ "$bios_sha" == "1e29fe9909c673d81a9e42d8312e08454c9ac433b4ff64a8b12da42ad281399d" ]]; then
+      ok "BIOS-GRUB: тестовый ISO на месте, sha256 1e29fe99… совпадает"
+    else
+      bad "BIOS-GRUB: sha256 тестового ISO не совпадает (файл изменён после QEMU-тестов)"
+    fi
   else
-    bad "BIOS-GRUB: sha256 тестового ISO не совпадает (файл изменён после QEMU-тестов)"
+    bad "BIOS-GRUB: нет тестового ISO experiments/bios-grub-test/out/xros-bios-test.iso"
   fi
+  bios_logs_ok=1
+  for f in bios-serial.log uefi-serial.log usb-serial.log bios-menu.png uefi-menu.png usb-menu.png; do
+    [[ -f "experiments/bios-grub-test/logs/$f" ]] || { echo "  нет лога BIOS-теста: $f"; bios_logs_ok=0; }
+  done
+  if [[ $bios_logs_ok -eq 1 ]]; then ok "BIOS-GRUB: все 3 serial-лога и 3 скриншота меню на месте"; else bad "BIOS-GRUB: не хватает логов/скриншотов QEMU-тестов"; fi
 else
-  bad "BIOS-GRUB: нет тестового ISO experiments/bios-grub-test/out/xros-bios-test.iso"
+  skip "BIOS-GRUB: тестовый ISO и логи QEMU" "каталога experiments/bios-grub-test/ нет — он вне git"
 fi
-bios_logs_ok=1
-for f in bios-serial.log uefi-serial.log usb-serial.log bios-menu.png uefi-menu.png usb-menu.png; do
-  [[ -f "experiments/bios-grub-test/logs/$f" ]] || { echo "  нет лога BIOS-теста: $f"; bios_logs_ok=0; }
-done
-if [[ $bios_logs_ok -eq 1 ]]; then ok "BIOS-GRUB: все 3 serial-лога и 3 скриншота меню на месте"; else bad "BIOS-GRUB: не хватает логов/скриншотов QEMU-тестов"; fi
 if grep -E "^bootmodes=" profile/profiledef.sh | grep -q 'bios.syslinux'; then
   bad "profiledef: bios.syslinux в bootmodes (вариант Б не должен внедряться без решения)"
 else
@@ -801,29 +822,33 @@ for cfg in profile/grub/grub.cfg profile/grub/loopback.cfg; do
 done
 uefi_after="experiments/uefi-test-module/logs/after/uefi-serial.log"
 uefi_before="experiments/uefi-test-module/logs/before/uefi-serial.log"
-if [[ -f "experiments/uefi-test-module/out/xros-uefi-test.iso" ]]; then
-  ok "UEFI-тест: тестовый ISO на месте"
-else
-  bad "UEFI-тест: нет тестового ISO experiments/uefi-test-module/out/xros-uefi-test.iso"
-fi
-if [[ -f "$uefi_before" ]] && grep -q 'test.mod' "$uefi_before"; then
-  ok "UEFI-тест: ДО исправления ошибки test.mod зафиксированы (дефект доказан)"
-else
-  bad "UEFI-тест: нет доказательства дефекта (before-лог без ошибок test.mod)"
-fi
-if [[ -f "$uefi_after" ]]; then
-  if grep -q 'test.mod' "$uefi_after"; then
-    bad "UEFI-тест: ПОСЛЕ исправления всё ещё есть ошибки test.mod"
+if [[ -d experiments/uefi-test-module ]]; then
+  if [[ -f "experiments/uefi-test-module/out/xros-uefi-test.iso" ]]; then
+    ok "UEFI-тест: тестовый ISO на месте"
   else
-    ok "UEFI-тест: ПОСЛЕ исправления 0 ошибок test.mod"
+    bad "UEFI-тест: нет тестового ISO experiments/uefi-test-module/out/xros-uefi-test.iso"
   fi
-  if grep -q 'XrOS 1.0 (%ARCH%, UEFI)' "$uefi_after"; then
-    ok "UEFI-тест: заголовок меню — UEFI (regexp работает)"
+  if [[ -f "$uefi_before" ]] && grep -q 'test.mod' "$uefi_before"; then
+    ok "UEFI-тест: ДО исправления ошибки test.mod зафиксированы (дефект доказан)"
   else
-    bad "UEFI-тест: в after-логе нет заголовка с UEFI"
+    bad "UEFI-тест: нет доказательства дефекта (before-лог без ошибок test.mod)"
+  fi
+  if [[ -f "$uefi_after" ]]; then
+    if grep -q 'test.mod' "$uefi_after"; then
+      bad "UEFI-тест: ПОСЛЕ исправления всё ещё есть ошибки test.mod"
+    else
+      ok "UEFI-тест: ПОСЛЕ исправления 0 ошибок test.mod"
+    fi
+    if grep -q 'XrOS 1.0 (%ARCH%, UEFI)' "$uefi_after"; then
+      ok "UEFI-тест: заголовок меню — UEFI (regexp работает)"
+    else
+      bad "UEFI-тест: в after-логе нет заголовка с UEFI"
+    fi
+  else
+    bad "UEFI-тест: нет after-лога experiments/uefi-test-module/logs/after/uefi-serial.log"
   fi
 else
-  bad "UEFI-тест: нет after-лога experiments/uefi-test-module/logs/after/uefi-serial.log"
+  skip "UEFI-тест: тестовый ISO и логи QEMU" "каталога experiments/uefi-test-module/ нет — он вне git"
 fi
 
 # 20д. Процессы установщика / отмена: тесты ЗАПУСКАЮТСЯ, их итог —
@@ -986,10 +1011,15 @@ else
   echo "$bad_dirs" | head -5
   bad "профиль: есть каталоги не 755 (кроме /root): $(echo "$bad_dirs" | wc -l) шт."
 fi
-if [[ "$(stat -c %a profile/airootfs/root)" == "750" ]]; then
+# git не хранит режимы каталогов: после клона /root — 755. Итоговые 750
+# задаёт сборка по file_permissions, поэтому 755 допустим, если запись есть.
+root_mode="$(stat -c %a profile/airootfs/root)"
+if [[ "$root_mode" == "750" ]]; then
   ok "профиль: /root 750"
+elif [[ "$root_mode" == "755" ]] && grep -qF '["/root"]="0:0:750"' profile/profiledef.sh; then
+  ok "профиль: /root 755 в рабочей копии, 750 задаёт file_permissions в profiledef.sh"
 else
-  bad "профиль: /root не 750 (сейчас $(stat -c %a profile/airootfs/root))"
+  bad "профиль: /root не 750 (сейчас $root_mode) и нет 750 в file_permissions"
 fi
 if [[ "$(stat -c %a profile/airootfs)" == "755" ]]; then
   ok "профиль: сам profile/airootfs 755"

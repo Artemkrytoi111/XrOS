@@ -10,3 +10,9 @@ experiments/       # QEMU-прогоны: логи, скриншоты, обра
 *.log
 __pycache__/
 *.pyc
+target/            # выход cargo
+# Выход makepkg: в git хранится только копия в repo/ (её кладёт build.sh)
+packages/*/*.pkg.tar.zst
+# Резервные копии БД от repo-add
+*.db.tar.gz.old
+*.files.tar.gz.old

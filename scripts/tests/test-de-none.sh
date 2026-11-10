@@ -65,8 +65,10 @@ for code in kde gnome xfce cinnamon sway i3 none; do
 done
 
 # ---------- (а) DE=none: графики нет ----------
+# shellcheck disable=SC2034  # NONE_PKGS/NONE_DM читает eval внутри check
 NONE_PKGS=$(case_line none | sed -E 's/.*DE_PKGS="([^"]*)".*/\1/')
 check "DE=none: DE_PKGS пуст (pacman -S графики не будет)" "[[ -z \"\$NONE_PKGS\" ]]"
+# shellcheck disable=SC2034
 NONE_DM=$(case_line none | sed -E 's/.*DE_DM="([^"]*)".*/\1/')
 check "DE=none: DE_DM пуст (менеджера входа нет)" "[[ -z \"\$NONE_DM\" ]]"
 

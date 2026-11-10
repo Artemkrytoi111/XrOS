@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Диагностика и тесты
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Инструменты
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck python3-pil
+          # Та же версия Rust, что в build-env проекта
+          rustup toolchain install 1.99.1 --profile minimal --component clippy
+          rustup default 1.99.1
+
+      # Диагностика вызывает cargo с --offline: зависимости нужны заранее
+      - name: Зависимости Rust
+        run: |
+          cargo fetch --locked --manifest-path src/xros-cli/Cargo.toml
+          cargo fetch --locked --manifest-path src/xros-install-gui-rs/Cargo.toml
+
+      - name: xros-diagnose.sh
+        run: ./scripts/xros-diagnose.sh
+
+  iso:
+    name: Сборка ISO
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: archlinux:latest
+      # mkarchiso монтирует proc/sys/dev в chroot сборки
+      options: --privileged
+    steps:
+      - name: Инструменты сборки
+        run: pacman -Syu --noconfirm --needed git archiso grub libisoburn mtools
+
+      - uses: actions/checkout@v4
+
+      - name: mkarchiso
+        run: |
+          # [xros] в profile/pacman.conf читается с file:///usr/share/xros/repo
+          install -d /usr/share/xros
+          cp -a --no-preserve=ownership repo /usr/share/xros/repo
+          mkarchiso -v -w /tmp/xros-work -o "$GITHUB_WORKSPACE/out" profile
+
+      - name: BIOS-GRUB (гибридный ISO) и проверка
+        run: |
+          # postprocess-bios-grub.sh ждёт проект в /xros (как в build-env)
+          ln -s "$GITHUB_WORKSPACE" /xros
+          iso="$(find /xros/out -maxdepth 1 -name 'xros-*.iso' | head -n 1)"
+          bash /xros/scripts/postprocess-bios-grub.sh --in-rootfs --iso "$iso"
+          hybrid="${iso%.iso}-hybrid.iso"
+          ./scripts/check-iso.sh --archiso "$hybrid"
+          (cd out && sha256sum "$(basename "$hybrid")" > SHA256SUMS && cat SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xros-iso
+          path: |
+            out/*-hybrid.iso
+            out/SHA256SUMS
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error

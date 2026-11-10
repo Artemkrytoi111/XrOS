@@ -40,3 +40,17 @@
 ```bash
 ./scripts/xros-diagnose.sh
 ```
+
+Каталоги `build-env/` и `experiments/` лежат вне git: на свежем клоне
+их проверки дают SKIP, а не FAIL.
+
+## CI
+
+`.github/workflows/ci.yml` на каждый push в `main` и на каждый pull request:
+
+1. запускает `scripts/xros-diagnose.sh` (shellcheck, cargo check/clippy,
+   тесты установщика) — при любом FAIL сборка не начинается;
+2. собирает ISO штатным `mkarchiso` в контейнере Arch Linux, добавляет
+   BIOS-GRUB (`postprocess-bios-grub.sh`), проверяет результат
+   `check-iso.sh` и выкладывает гибридный ISO с `SHA256SUMS`
+   артефактом `xros-iso` (хранится 14 дней).
