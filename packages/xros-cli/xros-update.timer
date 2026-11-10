@@ -1,0 +1,10 @@
+[Unit]
+Description=Еженедельное автообновление XrOS
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1w
+Persistent=true
+
+[Install]
+WantedBy=timers.target

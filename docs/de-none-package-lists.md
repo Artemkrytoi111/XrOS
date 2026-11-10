@@ -1,0 +1,1434 @@
+# Состав системы: KDE Plasma и DE=none («Без графики») — полные списки пакетов
+
+Проверено 10 ноября 2026 реальным разрешением зависимостей, а не переписыванием списков из кода.
+
+## Как получено (метод, воспроизводимый)
+
+1. Sync-БД Arch обновлены внутри chroot AKVT (`~/workspace/akvt-os/root.x86_64`, использован
+   только как инструмент проверки, зависимости от него в проект не добавлено):
+   `pacman -Sy` — `core.db` от 2026-11-09 13:10 UTC, `extra.db` от 2026-11-10 07:24 UTC
+   (на момент проверки — свежие, extra.db моложе 10 минут).
+2. Полное замыкание живой системы — `pacman -Sp` по всем 46 пакетам
+   `profile/packages.x86_64` (ядро, grub, NetworkManager, KDE Plasma 6.8 Wayland, SDDM,
+   PipeWire, PyQt6-приветствие, ufw и т.д.). Это и есть состав установленной KDE-системы:
+   KDE копируется из живой системы rsync, `pacman -S $DE_PKGS` для kde не выполняется —
+   список `DE_PKGS` для kde в движке является каноническим составом, а не списком установки.
+3. Удаление при DE=none симулировано НАСТОЯЩИМ pacman 7.1 (libalpm 16.0.1): из sync-БД
+   собрана поддельная local-БД на 644 пакета с правильными причинами установки
+   (46 explicit — пакеты `packages.x86_64`, 598 dependency), затем выполнены те же шаги,
+   что делает движок `src/xros-install` в ветке `none`:
+   `pacman -Rns --print <15 пакетов XROS_GRAPHICS_PKGS>` (в симуляции `-Rs --print`: флаг `-n`
+   влияет только на конфиги, не на набор пакетов; `--print` конфликтует с `--nosave`,
+   поэтому для печати списка использован `-Rs`) и `pacman -Qtdq` на остатке.
+4. Независимо проверено второй моделью (граф зависимостей из sync-БД, замыкание NEEDED от
+   оставшихся explicit-пакетов): результат совпал с pacman пакет-в-пакет (211 = 211).
+
+## Сравнение составов
+
+| Показатель | KDE Plasma (живая = установленная) | DE=none («только консоль») |
+|---|---:|---:|
+| Пакетов всего | **644** | **211** |
+| Явных (explicit) | 46 | 31 (те же минус 15 графических*) |
+| Зависимостей (dependency) | 598 | 180 |
+| Объём загрузки (CSIZE, сумма) | **1256,0 МиБ** | **748,5 МиБ** |
+| Установленный размер (ISIZE, сумма) | **3370,8 МиБ** | **1352,2 МиБ** |
+| Удалено при DE=none | — | **433 пакета, 507,5 МиБ загрузки / 2018,7 МиБ на диске** |
+
+*Из 46 явных пакетов при DE=none удаляются 15: `plasma-desktop plasma-nm plasma-pa kscreen
+sddm konsole dolphin pipewire pipewire-pulse wireplumber xorg-server ttf-dejavu noto-fonts
+python-pyqt6 libxkbcommon-x11`. Остаётся 31 явный пакет — вся базовая консольная система.
+
+## Что проверено в KDE (всё на месте)
+
+| Компонент | Пакеты в составе | Статус |
+|---|---|---|
+| Plasma | `plasma-desktop` 6.8.2, `plasma-workspace` 6.8.2, `kwin` 6.8.2, `breeze`, `powerdevil`, `systemsettings` | OK |
+| Display Manager | `sddm` (+ `xorg-server` как его зависимость) | OK |
+| Wayland | `wayland` 1.26.0, `kwin`, `qt6-wayland`, `xorg-xwayland` 24.1.14 | OK |
+| Терминал | `konsole` | OK |
+| Сеть | `networkmanager` 1.58.1, `plasma-nm`, `iw`, `iwd`, `wpa_supplicant`, `dhcpcd` | OK |
+| Управление пользователями | `plasma-workspace` содержит `kcm_users` (проверено по files-БД), `accountsservice`, `systemsettings` | OK |
+| Базовые системные инструменты | `base`, `linux` 7.2.14, `grub` 2.16, `sudo`, `openssh`, `polkit`, `udisks2`, `upower` | OK |
+| Звук | `pipewire` 1.6.10, `pipewire-pulse`, `wireplumber` 0.5.18 | OK |
+
+Примечания к KDE:
+
+- В живой системе НЕТ браузера (ни `firefox`, ни `chromium`) — как и в AKVT OS build 36,
+  команда `xros` откроет выбор браузера через `xdg-open`. Это осознанный минимализм
+  профиля, а не ошибка разрешения зависимостей; добавлять браузер или нет — решение Мии.
+- В живой системе НЕТ `kate`, `ark`, `spectacle`, `plasma-systemmonitor`, `discover`,
+  `gwenview`, `okular`, `kcalc`, `kwrite` — тоже по принципу профиля «только то, что реально
+  нужно». В чек-лист задачи они не входили; добавление — отдельное решение, списки пакетов
+  из-за этого НЕ менялись.
+- `pipewire-session-manager` и `pulse-native-provider` — с 2026 года это настоящие отдельные
+  пакеты в Arch (сплит-пакеты pipewire), а не только виртуальные provides. В составе их НЕТ:
+  `kwin`/`plasma-pa` удовлетворяют эти зависимости через `wireplumber` / `pipewire-pulse`,
+  уже входящие в профиль как explicit. Это выбор pacman при разрешении, а не пропуск.
+
+## Что проверено в DE=none (утечек графики нет)
+
+- `pacman -Rns` по 15 пакетам `XROS_GRAPHICS_PKGS` завершается успехом (exit 0): ни один
+  из 15 не требуется оставшейся системой. Все 15 удаляются, каскад `-Rns` снимает ещё
+  417 пакетов-зависимостей (Qt6, KF6, Plasma, Mesa, Wayland, Xorg — всего 433).
+- `pacman -Qtdq` после удаления: **0 сирот** — чистка сирот в движке в этом составе ничего
+  не добавляет, но остаётся страховкой на случай будущих изменений профиля.
+- В остатке (211 пакетов) НЕТ ни одного пакета с именами `qt6*`, `kf6*`, `plasma*`, `kde*`,
+  `sddm`/`gdm`/`lightdm`, `xorg*`, `wayland`, `pipewire*`, `mesa`, `gtk*`, `vulkan*`,
+  `ffmpeg`, `alsa-lib`, `pulseaudio`, `sdl*`, `noto-fonts`, `ttf-dejavu`, `freetype2`,
+  `fontconfig`, `harfbuzz`, `pango`, `cairo` — проверено поиском по именам и по графу
+  зависимостей. Даже низкоуровневые `libx11`, `libxcb`, `libxkbcommon`, `libdrm` удалены:
+  в базовой системе их никто не требует.
+- Остаток — чистая консольная система: ядро, grub, systemd, NetworkManager, sudo, openssh,
+  ufw, pacman, dialog (консольное меню `xros-welcome`), инструменты дисков и ФС.
+- Крупнейшие остатки: `linux` 161,6 МиБ, `linux-firmware-intel` 142,2 МиБ,
+  `linux-firmware-nvidia` 104,0 МиБ, `python` 73,9 МиБ, `glibc` 50,7 МиБ — всё это нужно
+  базе (`python` держит `ufw`: ufw — программа на Python; `binutils` 43,8 МиБ держат
+  `mkinitcpio` и `libmakepkg-dropins`; `gettext` 20,8 МиБ — `base`/`grub`/`pacman`).
+  `mkinitcpio-archiso` (0,05 МиБ) и `arch-install-scripts` (0,04 МиБ) остаются — это
+  live-инструменты, но они крошечные и безвредные (конфиг `archiso.conf` движок удаляет),
+  удалять их из установленной системы не требуется.
+- Все 7 вариантов DE в движке и GUI совпадают (`kde gnome xfce cinnamon sway i3 none`).
+- Цель загрузки: DE=none — `multi-user.target`, все три DM (`sddm`/`lightdm`/`gdm`)
+  отключаются; графические DE — `graphical.target`, включается ровно один DM; автовход
+  требует непустого `DE_DM`, при `none` не ставится. Офисный пакет при `none` пропускается.
+- Графическое приветствие при `none` удаляется полностью: скрипт `xros-welcome-gui`,
+  его лаунчер `/usr/share/applications/xros-welcome.desktop` и байткод `__pycache__`;
+  автостарт приветствия удаляется для всех DE в блоке «убрать живые следы».
+
+## Найденные проблемы и исправления (10 ноября 2026)
+
+1. **Расхождение staged-копий движка (FAIL в `test-de-none.sh`, предсуществующее).**
+   `profile/airootfs/usr/local/bin/xros-install` и `packages/xros-installer/xros-install`
+   были от 07:08, а `src/xros-install` — новее (ловушка EXIT, защита `$LOG` от симлинка,
+   защита диска). Исправлено: обе копии пересинхронизированы из `src/` (штатная процедура,
+   build.sh этап 2; PKGBUILD `prepare()` роняет сборку при расхождении). ВНИМАНИЕ: во время
+   работы `src/xros-install` правился параллельно другим агентом (защита от ошибок mount /
+   rsync / genfstab / часового пояса) — синхронизация повторена после его правок; при
+   дальнейших правках `src/` копии надо пересинхронизировать снова.
+2. **Мёртвые файлы графического приветствия при DE=none.** Ветка `none` удаляла только
+   `xros-welcome-gui`, но оставались лаунчер `/usr/share/applications/xros-welcome.desktop`
+   (Exec → несуществующий бинарь) и `__pycache__/xros-welcome-gui*.pyc`. Исправлено в
+   `src/xros-install` (ветка `none`): удаляются оба файла; в `scripts/tests/test-de-none.sh`
+   добавлены 2 проверки. Синхронизировано в airootfs и пакет.
+3. **Неточный комментарий про `libxkbcommon-x11`.** Было: «qt6-base сам уходит как сирота» —
+   на самом деле qt6-base уходит рекурсивным каскадом `-Rns` в той же транзакции (симуляция:
+   сирот после `-Rs` — 0). Комментарий исправлен.
+4. **Списки пакетов НЕ менялись.** Утечек графики в DE=none нет, в KDE по чек-листу всё на
+   месте, поэтому `XROS_GRAPHICS_PKGS`, `DE_PKGS` и `profile/packages.x86_64` не трогались.
+   Отсутствующие KDE-приложения (`kate`, `ark`, `spectacle`, браузер и т.д.) — вне чек-листа
+   и принципа минимализма профиля; их добавление — отдельное решение Мии.
+
+## Тест
+
+`bash scripts/tests/test-de-none.sh` — **PASS=58 FAIL=0** (до исправлений было PASS=55 FAIL=1
+из-за расхождения копий; +2 новые проверки на лаунчер/байткод приветствия).
+Скрипт статический (без установки); удаление пакетов проверено отдельно симуляцией на
+реальном pacman (см. «Как получено»).
+
+## Что не удалось проверить (SKIP)
+
+- Реальная установка DE=none на диск и загрузка в консоль (нужны ISO + QEMU; ISO не собирался,
+  это отдельный этап после разрешения Мии). Симуляция на pacman — точная модель транзакций
+  движка, но не загрузка системы.
+- Поведение `pacman -Rns` при частично отсутствующих пакетах из списка (движок фильтрует
+  список через `pacman -Qq` — логика прочитана, на живой системе не гонялась).
+- Остальные DE (gnome/xfce/cinnamon/sway/i3): их `DE_PKGS` прочитаны и сверены с GUI, но
+  полное разрешение зависимостей для них не делалось — задача охватывала KDE и DE=none.
+
+## Полный список: KDE Plasma (644 пакета, 1256.0 МиБ загрузки / 3370.8 МиБ на диске)
+
+- `abseil-cpp` 20260817.0-2
+- `accountsservice` 26.27.3-1
+- `acl` 2.4.0-1
+- `adwaita-fonts` 51.0-2
+- `alsa-card-profiles` 1:1.6.10-1
+- `alsa-lib` 1.2.16.1-1
+- `alsa-topology-conf` 1.2.5.1-4
+- `alsa-ucm-conf` 1.2.16.1-1
+- `amd-ucode` 20261019-1
+- `aom` 3.15.3-1
+- `appstream` 1.2.2-1
+- `appstream-qt` 1.2.2-1
+- `arch-install-scripts` 32-1
+- `archlinux-keyring` 20260909-1
+- `at-spi2-core` 2.62.1-1
+- `attica` 6.31.0-1
+- `attr` 2.6.0-1
+- `audit` 4.2.1-1
+- `aurorae` 6.8.2-1
+- `avahi` 1:0.9rc5-2
+- `baloo` 6.31.0-2
+- `baloo-widgets` 26.08.3-1
+- `base` 3-3
+- `bash` 5.3.20-1
+- `bash-completion` 2.18.0-1
+- `binutils` 2.47-4
+- `bluez-libs` 5.87-2
+- `breeze` 6.8.2-1
+- `breeze-cursors` 6.8.2-1
+- `breeze-icons` 6.31.0-1
+- `brotli` 1.2.1-1
+- `btrfs-progs` 7.3-1
+- `bubblewrap` 0.13.1-1
+- `bzip2` 1.0.8-6
+- `ca-certificates` 20240618-1
+- `ca-certificates-mozilla` 3.133-1
+- `ca-certificates-utils` 20240618-1
+- `cairo` 1.18.6-1
+- `cfitsio` 1:4.7.0-1
+- `cifs-utils` 7.9-1
+- `convertlit` 1.8-13
+- `coreutils` 9.12-2
+- `cryptsetup` 2.8.8-1
+- `curl` 8.23.0-1
+- `cxx-rust-cssparser` 1.1.0-1
+- `dav1d` 1.5.4-1
+- `db5.3` 5.3.28-7
+- `dbus` 1.16.2-2
+- `dbus-broker` 37-3
+- `dbus-broker-units` 37-3
+- `dbus-units` 37-3
+- `dconf` 51.0-1
+- `ddcutil` 3.0.2-1
+- `default-cursors` 3-1
+- `device-mapper` 2.03.44-1
+- `dhcpcd` 10.5.2-1
+- `dialog` 1:1.3_20260721-1
+- `diffutils` 3.12-2
+- `dolphin` 26.08.3-1
+- `dosfstools` 4.2-5
+- `double-conversion` 3.4.0-1
+- `duktape` 2.7.0-7
+- `e2fsprogs` 1.47.4-1
+- `ebook-tools` 0.2.2-9
+- `editorconfig-core-c` 0.12.11-1
+- `efibootmgr` 18-4
+- `efivar` 39-2
+- `ell` 0.83-1
+- `exiv2` 0.28.9-1
+- `expat` 2.10.0-1
+- `ffmpeg` 2:9.0.2-2
+- `fftw` 3.3.11-1
+- `file` 5.48-1
+- `filesystem` 2025.10.12-1
+- `findutils` 4.11.0-1
+- `flac` 1.5.0-1
+- `fontconfig` 2:2.18.3-2
+- `frameworkintegration` 6.31.0-1
+- `freetype2` 2.15.0-1
+- `fribidi` 1.0.18-1
+- `fuse-common` 3.18.3-1
+- `fuse2` 2.9.9-6
+- `fuse3` 3.18.3-1
+- `gawk` 5.4.1-1
+- `gcc-libs` 16.2.1+r23+gd564253eb6c8-1
+- `gdbm` 1.26-2
+- `gdk-pixbuf2` 2.44.8-1
+- `gettext` 1.0-2
+- `giflib` 6.1.3-2
+- `glib2` 2.90.1-1
+- `glibc` 2.44+r50+g1848099f063e-1
+- `glslang` 1:1.4.363.0-1
+- `glycin` 2.2.6-1
+- `gmp` 6.3.0-3
+- `gnulib-l10n` 20241231-1
+- `gnupg` 2.4.9-4
+- `gnutls` 3.8.13-3
+- `gperftools` 2.19.2-1
+- `gpgme` 2.2.0-1
+- `gpgmepp` 2.2.0-1
+- `gpm` 1.20.7.r38.ge82d1a6-7
+- `gptfdisk` 1.0.10-2
+- `graphene` 1.10.8-2
+- `graphite` 1:1.3.15-1
+- `grep` 3.12-2
+- `grub` 2:2.16-1
+- `gsettings-desktop-schemas` 51.0-1
+- `gsettings-system-schemas` 51.0-1
+- `gsm` 1.0.24-1
+- `gst-plugins-base-libs` 1.28.8-1
+- `gstreamer` 1.28.8-1
+- `gtest` 1.18.0-1
+- `gumbo-parser` 0.14.1-1
+- `gzip` 1.15-1
+- `harfbuzz` 15.1.0-1
+- `hdf5` 2.2.0-1
+- `hicolor-icon-theme` 0.18-1
+- `hidapi` 0.15.0-1
+- `highway` 1.4.0-1
+- `hunspell` 1.7.6-1
+- `hwdata` 0.412-1
+- `hwloc` 2.15.0-1
+- `i2c-tools` 4.4-4
+- `iana-etc` 20260617-1
+- `icu` 78.3-1
+- `iio-sensor-proxy` 3.9-1
+- `imath` 3.2.3-1
+- `intel-ucode` 20260925-1
+- `iproute2` 7.3.0-1
+- `iptables` 1:1.8.13-1
+- `iputils` 20250605-1
+- `iso-codes` 4.20.1-1
+- `iw` 6.17-1
+- `iwd` 3.12-2
+- `jack2` 1.9.22-2
+- `jansson` 2.15.1-1
+- `jbigkit` 2.2-1
+- `json-c` 0.19-1
+- `json-glib` 1.10.8-1
+- `kactivitymanagerd` 6.8.2-1
+- `karchive` 6.31.0-1
+- `kauth` 6.31.0-1
+- `kbd` 2.10.0-1
+- `kbookmarks` 6.31.0-1
+- `kcmutils` 6.31.0-1
+- `kcodecs` 6.31.0-1
+- `kcolorscheme` 6.31.0-1
+- `kcompletion` 6.31.0-1
+- `kconfig` 6.31.0-1
+- `kconfigwidgets` 6.31.0-1
+- `kcoreaddons` 6.31.0-1
+- `kcrash` 6.31.0-1
+- `kdbusaddons` 6.31.0-1
+- `kde-cli-tools` 6.8.2-1
+- `kdeclarative` 6.31.0-1
+- `kdecoration` 6.8.2-1
+- `kded` 6.31.0-1
+- `kdesu` 6.31.0-1
+- `kdnssd` 6.31.0-1
+- `kdsoap` 2.3.0-1
+- `kdsoap-ws-discovery-client` 0.4.0-3
+- `keyutils` 1.6.3-4
+- `kfilemetadata` 6.31.0-1
+- `kglobalaccel` 6.31.0-1
+- `kglobalacceld` 6.8.2-1
+- `kguiaddons` 6.31.0-1
+- `kholidays` 1:6.31.0-1
+- `ki18n` 6.31.0-1
+- `kiconthemes` 6.31.0-1
+- `kidletime` 6.31.0-1
+- `kimageformats` 6.31.0-1
+- `kio` 6.31.0-1
+- `kio-extras` 26.08.3-1
+- `kio-fuse` 5.1.1-2
+- `kirigami` 6.31.0-1
+- `kirigami-addons` 1.16.1-1
+- `kitemmodels` 6.31.0-1
+- `kitemviews` 6.31.0-1
+- `kjobwidgets` 6.31.0-1
+- `kmenuedit` 6.8.2-1
+- `kmod` 34.3-1
+- `knewstuff` 6.31.0-1
+- `knighttime` 6.8.2-1
+- `knotifications` 6.31.0-1
+- `knotifyconfig` 6.31.0-1
+- `konsole` 26.08.3-1
+- `kpackage` 6.31.0-1
+- `kparts` 6.31.0-1
+- `kpipewire` 6.8.2-1
+- `kpty` 6.31.0-1
+- `kquickcharts` 6.31.0-1
+- `krb5` 1.22.2-1
+- `krunner` 6.31.0-1
+- `kscreen` 6.8.2-1
+- `kscreenlocker` 6.8.2-1
+- `kservice` 6.31.0-1
+- `kstatusnotifieritem` 6.31.0-1
+- `ksvg` 6.31.0-1
+- `ksystemstats` 6.8.2-1
+- `ktexteditor` 6.31.0-1
+- `ktextwidgets` 6.31.0-1
+- `kunitconversion` 6.31.0-1
+- `kuserfeedback` 6.31.0-1
+- `kwallet` 6.31.0-1
+- `kwayland` 6.8.2-1
+- `kwidgetsaddons` 6.31.0-1
+- `kwin` 6.8.2-2
+- `kwindowsystem` 6.31.0-1
+- `kxmlgui` 6.31.0-1
+- `l-smash` 2.14.5-4
+- `lame` 4.0-1
+- `layer-shell-qt` 6.8.2-1
+- `lcms2` 2.20-1
+- `ldb` 2:4.25.1-1
+- `leancrypto` 1.9.1-1
+- `less` 1:710-1
+- `libaec` 1.1.7-1
+- `libarchive` 3.8.11-1
+- `libasan` 16.2.1+r23+gd564253eb6c8-1
+- `libass` 0.17.5-1
+- `libassuan` 3.0.0-1
+- `libasyncns` 1:0.8+r3+g68cd5af-3
+- `libatasmart` 0.19-8
+- `libatomic` 16.2.1+r23+gd564253eb6c8-1
+- `libavc1394` 0.5.4-7
+- `libb2` 0.98.1-3
+- `libblake3` 1.8.7-1
+- `libblockdev` 3.5.0-2
+- `libblockdev-crypto` 3.5.0-2
+- `libblockdev-fs` 3.5.0-2
+- `libblockdev-loop` 3.5.0-2
+- `libblockdev-mdraid` 3.5.0-2
+- `libblockdev-nvme` 3.5.0-2
+- `libblockdev-part` 3.5.0-2
+- `libblockdev-smart` 3.5.0-2
+- `libblockdev-swap` 3.5.0-2
+- `libbluray` 1.5.1-1
+- `libbpf` 1.7.0-1
+- `libbs2b` 3.1.0-11
+- `libbsd` 0.12.2-2
+- `libbytesize` 2.12-3
+- `libcanberra` 1:0.30+r2+gc0620e4-6
+- `libcap` 2.78-1
+- `libcap-ng` 0.9.6-1
+- `libcgif` 0.5.4-1
+- `libcups` 2:2.4.20-1
+- `libdaemon` 0.14-6
+- `libdatrie` 0.2.14-1
+- `libdecor` 0.2.5-1
+- `libdeflate` 1.26-1
+- `libdisplay-info` 0.3.0-1
+- `libdmtx` 0.7.8-1
+- `libdovi` 3.4.0-1
+- `libdrm` 2.4.134-1
+- `libdvdnav` 7.0.0-1
+- `libdvdread` 7.1.1-1
+- `libebur128` 1.2.6-2
+- `libedit` 20260512_3.1-1
+- `libei` 1.6.0-2
+- `libelf` 0.197-1
+- `libepoxy` 1.5.10-3
+- `libevdev` 1.14.0-1
+- `libevent` 2.1.13-2
+- `libexif` 0.6.26-1
+- `libfdk-aac` 3.0.0-1
+- `libffi` 3.8.0-1
+- `libfontenc` 1.1.9-1
+- `libfreeaptx` 0.2.2-1
+- `libfyaml` 0.9.6-3
+- `libgcc` 16.2.1+r23+gd564253eb6c8-1
+- `libgcrypt` 1.12.4-1
+- `libgfortran` 16.2.1+r23+gd564253eb6c8-1
+- `libglvnd` 1.7.0-3
+- `libgomp` 16.2.1+r23+gd564253eb6c8-1
+- `libgpg-error` 1.61-1
+- `libgudev` 238-4
+- `libhwasan` 16.2.1+r23+gd564253eb6c8-1
+- `libice` 1.1.2-1
+- `libidn2` 2.3.8-1
+- `libiec61883` 1.2.0-9
+- `libimagequant` 4.4.1-2
+- `libimobiledevice` 1.4.0-2
+- `libimobiledevice-glue` 1.3.2-1
+- `libinih` 62-2
+- `libinput` 1.32.0-1
+- `libjpeg-turbo` 3.2.1-1
+- `libjxl` 0.12.0-1
+- `libkexiv2` 26.08.3-1
+- `libksba` 1.8.1-1
+- `libkscreen` 6.8.2-1
+- `libksysguard` 6.8.2-1
+- `liblc3` 1.1.3-2
+- `libldac` 2.0.2.6-1
+- `libldap` 2.7.2-2
+- `liblsan` 16.2.1+r23+gd564253eb6c8-1
+- `libmakepkg-dropins` 20-2
+- `libmatio` 1.5.30-1
+- `libmbim` 1.34.0-2
+- `libmd` 1.3.0-1
+- `libmm-glib` 1.24.2-2
+- `libmnl` 1.0.5-2
+- `libmodplug` 0.8.9.0-7
+- `libmtp` 1.1.23-1
+- `libmysofa` 1.3.5-1
+- `libndp` 1.9-1
+- `libnetfilter_conntrack` 1.1.1-1
+- `libnewt` 0.52.25-2
+- `libnfnetlink` 1.0.2-2
+- `libnftnl` 1.3.2-1
+- `libnghttp2` 1.71.0-1
+- `libnghttp3` 1.19.0-1
+- `libngtcp2` 1.26.0-1
+- `libnl` 3.12.0-1
+- `libnm` 1.58.1-3
+- `libnsl` 2.0.1-2
+- `libntfs-3g` 2026.9.28-1
+- `libnvme` 1.16.2-2
+- `libobjc` 16.2.1+r23+gd564253eb6c8-1
+- `libogg` 1.3.6-1
+- `libopenmpt` 0.8.10-1
+- `libp11-kit` 0.26.5-1
+- `libpcap` 1.11.0-1
+- `libpciaccess` 0.19-1
+- `libpgm` 5.3.128-4
+- `libpipewire` 1:1.6.10-1
+- `libplacebo` 7.360.1-7
+- `libplasma` 6.8.2-1
+- `libplist` 2.7.0-3
+- `libpng` 1.6.59-1
+- `libproxy` 0.5.12-1
+- `libpsl` 0.21.5-2
+- `libpulse` 17.0+r134+g77d25a1e6-1
+- `libqaccessibilityclient-qt6` 0.6.0-4
+- `libqalculate` 5.13.2-1
+- `libqmi` 1.38.0-2
+- `libqrtr-glib` 1.4.0-2
+- `libquadmath` 16.2.1+r23+gd564253eb6c8-1
+- `libraw` 0.22.3-1
+- `libraw1394` 2.1.2-4
+- `librsvg` 2:2.63.4-1
+- `libsamplerate` 0.2.2-3
+- `libsasl` 2.1.28-5
+- `libseccomp` 2.6.0-1
+- `libsecret` 0.21.8.2-1
+- `libsm` 1.2.6-1
+- `libsndfile` 1.2.2-4
+- `libsodium` 1.0.22-1
+- `libsoxr` 0.1.3-5
+- `libssc` 0.4.4-1
+- `libssh` 0.12.2-1
+- `libssh2` 1.11.1-7
+- `libstdc++` 16.2.1+r23+gd564253eb6c8-1
+- `libstemmer` 3.2.0-1
+- `libsysprof-capture` 51.0-1
+- `libtasn1` 4.21.0-1
+- `libtatsu` 1.0.5-1
+- `libteam` 1.32-3
+- `libthai` 0.1.30-1
+- `libtheora` 1.2.0-1
+- `libtiff` 4.7.2-2
+- `libtirpc` 1.3.8-1
+- `libtommath` 1.3.0-2
+- `libtool` 2.6.2-5
+- `libtsan` 16.2.1+r23+gd564253eb6c8-1
+- `libubsan` 16.2.1+r23+gd564253eb6c8-1
+- `libunibreak` 7.0-1
+- `libunistring` 1.4.2-1
+- `libunwind` 1.8.3-1
+- `liburcu` 0.15.7-1
+- `liburing` 2.15-1
+- `libusb` 1.0.30-1
+- `libusbmuxd` 2.1.1-2
+- `libutempter` 1.2.3-1
+- `libva` 2.24.1-1
+- `libvdpau` 1.5-4
+- `libverto` 0.3.2-6
+- `libvips` 8.18.7-1
+- `libvorbis` 1.3.7-4
+- `libvpl` 2.17.0-1
+- `libvpx` 1.17.0-1
+- `libwacom` 2.20.0-1
+- `libwbclient` 2:4.25.1-1
+- `libwebp` 1.6.0-2
+- `libwireplumber` 0.5.18-1
+- `libx11` 1.8.14-1
+- `libxau` 1.0.12-1
+- `libxaw` 1.0.16-2
+- `libxcb` 1.17.0-1
+- `libxcrypt` 4.5.2-1
+- `libxcursor` 1.2.3-1
+- `libxcvt` 0.1.3-1
+- `libxdmcp` 1.1.5-2
+- `libxext` 1.3.7-1
+- `libxfixes` 6.0.2-1
+- `libxfont2` 2.0.9-1
+- `libxft` 2.3.9-1
+- `libxi` 1.8.4-1
+- `libxkbcommon` 1.13.2-1
+- `libxkbcommon-x11` 1.13.2-1
+- `libxkbfile` 1.2.0-1
+- `libxml2` 2.15.4-1
+- `libxmlb` 0.3.29-1
+- `libxmu` 1.3.1-1
+- `libxpm` 3.5.20-1
+- `libxrandr` 1.5.5-1
+- `libxrender` 0.9.13-1
+- `libxshmfence` 1.3.3-1
+- `libxslt` 1.1.45-2
+- `libxt` 1.3.1-1
+- `libxtst` 1.2.6-1
+- `libxv` 1.0.13-1
+- `libxxf86vm` 1.1.7-1
+- `libzip` 1.11.4-1
+- `licenses` 20240728-1
+- `lilv` 0.28.0-1
+- `linux` 7.2.14.arch1-1
+- `linux-api-headers` 7.3-1
+- `linux-firmware` 20261019-1
+- `linux-firmware-amd` 20261019-1
+- `linux-firmware-amdgpu` 20261019-1
+- `linux-firmware-atheros` 20261019-1
+- `linux-firmware-broadcom` 20261019-1
+- `linux-firmware-cirrus` 20261019-1
+- `linux-firmware-intel` 20261019-1
+- `linux-firmware-mediatek` 20261019-1
+- `linux-firmware-nvidia` 20261019-1
+- `linux-firmware-other` 20261019-1
+- `linux-firmware-radeon` 20261019-1
+- `linux-firmware-realtek` 20261019-1
+- `linux-firmware-ti` 20261019-1
+- `linux-firmware-whence` 20261019-1
+- `litehtml` 0.10-2
+- `llvm-libs` 23.1.4-1
+- `lm_sensors` 1:3.6.2-1
+- `lmdb` 0.9.35-1
+- `lua` 5.5.1-1
+- `lua54` 5.4.9-1
+- `lv2` 1.18.10-2
+- `lz4` 1:1.11.0-1
+- `lzo` 2.10-5
+- `md4c` 0.6.0-2
+- `mdadm` 4.6-2
+- `media-player-info` 26-1
+- `mesa` 1:26.2.6-1
+- `milou` 6.8.2-1
+- `mkinitcpio` 42.2-1
+- `mkinitcpio-archiso` 73-1
+- `mkinitcpio-busybox` 1.36.1-1
+- `mobile-broadband-provider-info` 20251101-1
+- `modemmanager` 1.24.2-2
+- `modemmanager-qt` 6.31.0-1
+- `mpdecimal` 4.0.1-3
+- `mpfr` 4.2.2-1
+- `mpg123` 1.33.7-1
+- `mtdev` 1.1.7-1
+- `nano` 9.3-1
+- `ncurses` 6.6-2
+- `nettle` 4.0-1
+- `networkmanager` 1.58.1-3
+- `networkmanager-qt` 6.31.0-1
+- `nftables` 1:1.1.7-3
+- `noto-fonts` 1:2026.11.01-1
+- `noto-fonts-emoji` 1:20260924-1
+- `npth` 1.8-1
+- `nspr` 4.40-1
+- `nss` 3.133-1
+- `ntfs-3g` 2026.9.28-1
+- `numactl` 2.0.19-1
+- `ocean-sound-theme` 6.8.2-1
+- `ocl-icd` 2.3.5-1
+- `onetbb` 2023.2.0-1
+- `opencore-amr` 0.1.6-2
+- `openexr` 3.5.3-3
+- `openjpeg2` 2.5.4-1
+- `openjph` 0.33.0-1
+- `openssh` 10.6p1-2
+- `openssl` 3.6.5-1
+- `opus` 1.6.1-1
+- `orc` 0.4.44-1
+- `os-prober` 1.85-1
+- `p11-kit` 0.26.5-1
+- `pacman` 7.1.0.r9.g54d9411-3
+- `pacman-mirrorlist` 20260610-1
+- `pam` 1.7.3-1
+- `pambase` 20260616-1
+- `pango` 1:1.58.2-1
+- `parted` 3.8-1
+- `pciutils` 3.15.0-1
+- `pcre` 8.45-5
+- `pcre2` 10.49-1
+- `pcsclite` 2.5.3-1
+- `perl` 5.44.0-1
+- `pinentry` 1.3.3-1
+- `pipewire` 1:1.6.10-1
+- `pipewire-audio` 1:1.6.10-1
+- `pipewire-pulse` 1:1.6.10-1
+- `pixman` 0.46.4-1
+- `plasma-activities` 6.8.2-1
+- `plasma-activities-stats` 6.8.2-1
+- `plasma-desktop` 6.8.2-1
+- `plasma-integration` 6.8.2-1
+- `plasma-nm` 6.8.2-1
+- `plasma-pa` 6.8.2-1
+- `plasma-workspace` 6.8.2-1
+- `plasma5support` 6.8.2-1
+- `polkit` 128-1
+- `polkit-kde-agent` 6.8.2-1
+- `polkit-qt6` 0.201.1-1
+- `poppler` 26.10.0-2
+- `poppler-qt6` 26.10.0-2
+- `popt` 1.19-2
+- `portaudio` 1:19.7.0-4
+- `powerdevil` 6.8.2-1
+- `ppp` 2.5.5-1
+- `prison` 6.31.0-1
+- `procps-ng` 4.0.7-1
+- `protobuf` 36.1-1
+- `protobuf-c` 1.5.2-15
+- `psmisc` 23.7-2
+- `pulseaudio-qt` 1.9.0-1
+- `python` 3.14.9-1
+- `python-pyqt6` 6.12.0-2
+- `python-pyqt6-sip` 13.13.0-1
+- `qca-qt6` 2.3.12-1
+- `qcoro` 0.13.0-2
+- `qqc2-breeze-style` 6.8.2-1
+- `qqc2-desktop-style` 6.31.0-1
+- `qrencode` 4.1.1-4
+- `qt6-5compat` 6.12.0-1
+- `qt6-base` 6.12.0-3
+- `qt6-declarative` 6.12.0-4
+- `qt6-location` 6.12.0-1
+- `qt6-multimedia` 6.12.0-1
+- `qt6-multimedia-ffmpeg` 6.12.0-1
+- `qt6-positioning` 6.12.0-1
+- `qt6-shadertools` 6.12.0-1
+- `qt6-speech` 6.12.0-1
+- `qt6-svg` 6.12.0-1
+- `qt6-tools` 6.12.0-1
+- `qt6-translations` 6.12.0-1
+- `qt6-virtualkeyboard` 6.12.0-1
+- `qt6-websockets` 6.12.0-1
+- `qtkeychain-qt6` 0.17.0-1
+- `rav1e` 0.8.1-3
+- `readline` 8.3.6-1
+- `ripgrep` 15.2.0-1
+- `ripgrep-all` 0.10.10-3
+- `rsync` 3.5.2-1
+- `rubberband` 4.0.0-2
+- `sbc` 2.2-1
+- `sddm` 0.21.0-7
+- `sdl2-compat` 2.32.74-1
+- `sdl3` 3.4.18-1
+- `sed` 4.10-2
+- `serd` 0.32.10-1
+- `shaderc` 2026.4-1
+- `shadow` 4.20.0.arch1-1
+- `shared-mime-info` 2.5.1-2
+- `slang` 2.3.3-4
+- `smbclient` 2:4.25.1-1
+- `snappy` 1.3.1-1
+- `sndio` 1.10.0-1
+- `solid` 6.31.0-1
+- `sonnet` 6.31.0-1
+- `sord` 0.16.22-1
+- `sound-theme-freedesktop` 0.8-6
+- `spandsp` 0.0.6-7
+- `speex` 1.2.1-3
+- `speexdsp` 1.2.1-3
+- `spirv-tools` 1:1.4.363.0-1
+- `sqlite` 3.54.1-1
+- `sratom` 0.6.22-1
+- `srt` 1.5.7-2
+- `sudo` 1.9.17.p2-6
+- `svt-av1` 4.2.0-1
+- `syndication` 6.31.0-1
+- `syntax-highlighting` 6.31.0-1
+- `systemd` 262.1-1
+- `systemd-libs` 262.1-1
+- `systemd-sysvcompat` 262.1-1
+- `systemsettings` 6.8.2-1
+- `taglib` 2.3.2-1
+- `talloc` 2.5.0-2
+- `tar` 1.35-5
+- `tdb` 1.4.15-2
+- `tevent` 1:0.17.2-2
+- `tpm2-tss` 4.2.0-2
+- `tslib` 1.24-1
+- `ttf-dejavu` 2.37+18+g9b5d1b2f-8
+- `ttf-hack` 3.003-7
+- `tzdata` 2026f-1
+- `udisks2` 2.11.2-1
+- `ufw` 0.36.2-7
+- `union` 6.8.2-1
+- `upower` 1.91.5-1
+- `util-linux` 2.42.4-1
+- `util-linux-libs` 2.42.4-1
+- `v4l-utils` 1.32.0-2
+- `vapoursynth` 81-1
+- `vid.stab` 1.1.2-1
+- `vmaf` 3.2.1-1
+- `volume_key` 0.3.12-12
+- `vulkan-icd-loader` 1.4.363.0-1
+- `wayland` 1.26.0-1
+- `webrtc-audio-processing-1` 1.3-6
+- `wireplumber` 0.5.18-1
+- `wpa_supplicant` 2:2.12-1
+- `x264` 3:0.165.r3222.b35605a-2
+- `x265` 4.3-1
+- `xcb-proto` 1.17.0-4
+- `xcb-util` 0.4.1-2
+- `xcb-util-cursor` 0.1.6-1
+- `xcb-util-image` 0.4.1-3
+- `xcb-util-keysyms` 0.4.1-5
+- `xcb-util-renderutil` 0.3.10-2
+- `xcb-util-wm` 0.4.2-2
+- `xdg-desktop-portal` 1.22.1-2
+- `xdg-desktop-portal-kde` 6.8.2-1
+- `xdg-user-dirs` 0.20-1
+- `xdg-utils` 1.2.1-2
+- `xf86-input-libinput` 1.5.0-1
+- `xfsprogs` 7.2.1-1
+- `xkeyboard-config` 2.49-1
+- `xorg-fonts-encodings` 1.1.0-2
+- `xorg-server` 21.1.25-2
+- `xorg-server-common` 21.1.25-2
+- `xorg-setxkbmap` 1.3.5-1
+- `xorg-xauth` 1.1.5-1
+- `xorg-xkbcomp` 1.5.0-1
+- `xorg-xmessage` 1.0.7-2
+- `xorg-xprop` 1.2.8-1
+- `xorg-xrdb` 1.2.3-1
+- `xorg-xwayland` 24.1.14-1
+- `xorgproto` 2026.1-1
+- `xvidcore` 1.3.7-4
+- `xxhash` 0.8.4-1
+- `xz` 5.8.4-1
+- `zeromq` 4.3.5-3
+- `zimg` 3.0.6-2
+- `zint` 2.16.0-2
+- `zix` 0.8.2-1
+- `zlib` 1:1.3.2-4
+- `zstd` 1.5.7-3
+- `zxing-cpp` 3.1.1-1
+
+## Полный список: DE=none (211 пакетов, 748.5 МиБ загрузки / 1352.2 МиБ на диске)
+
+- `acl` 2.4.0-1
+- `amd-ucode` 20261019-1
+- `arch-install-scripts` 32-1
+- `archlinux-keyring` 20260909-1
+- `attr` 2.6.0-1
+- `audit` 4.2.1-1
+- `base` 3-3
+- `bash` 5.3.20-1
+- `bash-completion` 2.18.0-1
+- `binutils` 2.47-4
+- `brotli` 1.2.1-1
+- `btrfs-progs` 7.3-1
+- `bzip2` 1.0.8-6
+- `ca-certificates` 20240618-1
+- `ca-certificates-mozilla` 3.133-1
+- `ca-certificates-utils` 20240618-1
+- `coreutils` 9.12-2
+- `cryptsetup` 2.8.8-1
+- `curl` 8.23.0-1
+- `dbus` 1.16.2-2
+- `dbus-broker` 37-3
+- `dbus-broker-units` 37-3
+- `dbus-units` 37-3
+- `device-mapper` 2.03.44-1
+- `dhcpcd` 10.5.2-1
+- `dialog` 1:1.3_20260721-1
+- `diffutils` 3.12-2
+- `dosfstools` 4.2-5
+- `duktape` 2.7.0-7
+- `e2fsprogs` 1.47.4-1
+- `efibootmgr` 18-4
+- `efivar` 39-2
+- `ell` 0.83-1
+- `expat` 2.10.0-1
+- `file` 5.48-1
+- `filesystem` 2025.10.12-1
+- `findutils` 4.11.0-1
+- `fuse-common` 3.18.3-1
+- `fuse2` 2.9.9-6
+- `gawk` 5.4.1-1
+- `gcc-libs` 16.2.1+r23+gd564253eb6c8-1
+- `gdbm` 1.26-2
+- `gettext` 1.0-2
+- `glib2` 2.90.1-1
+- `glibc` 2.44+r50+g1848099f063e-1
+- `gmp` 6.3.0-3
+- `gnulib-l10n` 20241231-1
+- `gnupg` 2.4.9-4
+- `gnutls` 3.8.13-3
+- `gpgme` 2.2.0-1
+- `gpm` 1.20.7.r38.ge82d1a6-7
+- `gptfdisk` 1.0.10-2
+- `grep` 3.12-2
+- `grub` 2:2.16-1
+- `gzip` 1.15-1
+- `hwdata` 0.412-1
+- `iana-etc` 20260617-1
+- `icu` 78.3-1
+- `intel-ucode` 20260925-1
+- `iproute2` 7.3.0-1
+- `iptables` 1:1.8.13-1
+- `iputils` 20250605-1
+- `iw` 6.17-1
+- `iwd` 3.12-2
+- `jansson` 2.15.1-1
+- `json-c` 0.19-1
+- `kbd` 2.10.0-1
+- `keyutils` 1.6.3-4
+- `kmod` 34.3-1
+- `krb5` 1.22.2-1
+- `leancrypto` 1.9.1-1
+- `less` 1:710-1
+- `libarchive` 3.8.11-1
+- `libasan` 16.2.1+r23+gd564253eb6c8-1
+- `libassuan` 3.0.0-1
+- `libatomic` 16.2.1+r23+gd564253eb6c8-1
+- `libbpf` 1.7.0-1
+- `libcap` 2.78-1
+- `libcap-ng` 0.9.6-1
+- `libdaemon` 0.14-6
+- `libedit` 20260512_3.1-1
+- `libelf` 0.197-1
+- `libevent` 2.1.13-2
+- `libffi` 3.8.0-1
+- `libgcc` 16.2.1+r23+gd564253eb6c8-1
+- `libgcrypt` 1.12.4-1
+- `libgfortran` 16.2.1+r23+gd564253eb6c8-1
+- `libgomp` 16.2.1+r23+gd564253eb6c8-1
+- `libgpg-error` 1.61-1
+- `libhwasan` 16.2.1+r23+gd564253eb6c8-1
+- `libidn2` 2.3.8-1
+- `libinih` 62-2
+- `libksba` 1.8.1-1
+- `libldap` 2.7.2-2
+- `liblsan` 16.2.1+r23+gd564253eb6c8-1
+- `libmakepkg-dropins` 20-2
+- `libmm-glib` 1.24.2-2
+- `libmnl` 1.0.5-2
+- `libndp` 1.9-1
+- `libnetfilter_conntrack` 1.1.1-1
+- `libnewt` 0.52.25-2
+- `libnfnetlink` 1.0.2-2
+- `libnftnl` 1.3.2-1
+- `libnghttp2` 1.71.0-1
+- `libnghttp3` 1.19.0-1
+- `libngtcp2` 1.26.0-1
+- `libnl` 3.12.0-1
+- `libnm` 1.58.1-3
+- `libnsl` 2.0.1-2
+- `libntfs-3g` 2026.9.28-1
+- `libobjc` 16.2.1+r23+gd564253eb6c8-1
+- `libp11-kit` 0.26.5-1
+- `libpcap` 1.11.0-1
+- `libpgm` 5.3.128-4
+- `libpsl` 0.21.5-2
+- `libquadmath` 16.2.1+r23+gd564253eb6c8-1
+- `libsasl` 2.1.28-5
+- `libseccomp` 2.6.0-1
+- `libsecret` 0.21.8.2-1
+- `libsodium` 1.0.22-1
+- `libssh2` 1.11.1-7
+- `libstdc++` 16.2.1+r23+gd564253eb6c8-1
+- `libsysprof-capture` 51.0-1
+- `libtasn1` 4.21.0-1
+- `libteam` 1.32-3
+- `libtirpc` 1.3.8-1
+- `libtsan` 16.2.1+r23+gd564253eb6c8-1
+- `libubsan` 16.2.1+r23+gd564253eb6c8-1
+- `libunistring` 1.4.2-1
+- `liburcu` 0.15.7-1
+- `libusb` 1.0.30-1
+- `libverto` 0.3.2-6
+- `libxcrypt` 4.5.2-1
+- `libxml2` 2.15.4-1
+- `licenses` 20240728-1
+- `linux` 7.2.14.arch1-1
+- `linux-api-headers` 7.3-1
+- `linux-firmware` 20261019-1
+- `linux-firmware-amd` 20261019-1
+- `linux-firmware-amdgpu` 20261019-1
+- `linux-firmware-atheros` 20261019-1
+- `linux-firmware-broadcom` 20261019-1
+- `linux-firmware-cirrus` 20261019-1
+- `linux-firmware-intel` 20261019-1
+- `linux-firmware-mediatek` 20261019-1
+- `linux-firmware-nvidia` 20261019-1
+- `linux-firmware-other` 20261019-1
+- `linux-firmware-radeon` 20261019-1
+- `linux-firmware-realtek` 20261019-1
+- `linux-firmware-ti` 20261019-1
+- `linux-firmware-whence` 20261019-1
+- `lmdb` 0.9.35-1
+- `lz4` 1:1.11.0-1
+- `lzo` 2.10-5
+- `mkinitcpio` 42.2-1
+- `mkinitcpio-archiso` 73-1
+- `mkinitcpio-busybox` 1.36.1-1
+- `mobile-broadband-provider-info` 20251101-1
+- `mpdecimal` 4.0.1-3
+- `mpfr` 4.2.2-1
+- `nano` 9.3-1
+- `ncurses` 6.6-2
+- `nettle` 4.0-1
+- `networkmanager` 1.58.1-3
+- `nftables` 1:1.1.7-3
+- `npth` 1.8-1
+- `nspr` 4.40-1
+- `nss` 3.133-1
+- `ntfs-3g` 2026.9.28-1
+- `openssh` 10.6p1-2
+- `openssl` 3.6.5-1
+- `os-prober` 1.85-1
+- `p11-kit` 0.26.5-1
+- `pacman` 7.1.0.r9.g54d9411-3
+- `pacman-mirrorlist` 20260610-1
+- `pam` 1.7.3-1
+- `pambase` 20260616-1
+- `parted` 3.8-1
+- `pciutils` 3.15.0-1
+- `pcre` 8.45-5
+- `pcre2` 10.49-1
+- `pcsclite` 2.5.3-1
+- `pinentry` 1.3.3-1
+- `polkit` 128-1
+- `popt` 1.19-2
+- `procps-ng` 4.0.7-1
+- `psmisc` 23.7-2
+- `python` 3.14.9-1
+- `readline` 8.3.6-1
+- `rsync` 3.5.2-1
+- `sed` 4.10-2
+- `shadow` 4.20.0.arch1-1
+- `slang` 2.3.3-4
+- `sqlite` 3.54.1-1
+- `sudo` 1.9.17.p2-6
+- `systemd` 262.1-1
+- `systemd-libs` 262.1-1
+- `systemd-sysvcompat` 262.1-1
+- `tar` 1.35-5
+- `tpm2-tss` 4.2.0-2
+- `tzdata` 2026f-1
+- `ufw` 0.36.2-7
+- `util-linux` 2.42.4-1
+- `util-linux-libs` 2.42.4-1
+- `wpa_supplicant` 2:2.12-1
+- `xfsprogs` 7.2.1-1
+- `xxhash` 0.8.4-1
+- `xz` 5.8.4-1
+- `zeromq` 4.3.5-3
+- `zlib` 1:1.3.2-4
+- `zstd` 1.5.7-3
+
+## Удалено при DE=none (433 пакета, 507.5 МиБ загрузки / 2018.7 МиБ на диске)
+
+- `abseil-cpp` 20260817.0-2
+- `accountsservice` 26.27.3-1
+- `adwaita-fonts` 51.0-2
+- `alsa-card-profiles` 1:1.6.10-1
+- `alsa-lib` 1.2.16.1-1
+- `alsa-topology-conf` 1.2.5.1-4
+- `alsa-ucm-conf` 1.2.16.1-1
+- `aom` 3.15.3-1
+- `appstream` 1.2.2-1
+- `appstream-qt` 1.2.2-1
+- `at-spi2-core` 2.62.1-1
+- `attica` 6.31.0-1
+- `aurorae` 6.8.2-1
+- `avahi` 1:0.9rc5-2
+- `baloo` 6.31.0-2
+- `baloo-widgets` 26.08.3-1
+- `bluez-libs` 5.87-2
+- `breeze` 6.8.2-1
+- `breeze-cursors` 6.8.2-1
+- `breeze-icons` 6.31.0-1
+- `bubblewrap` 0.13.1-1
+- `cairo` 1.18.6-1
+- `cfitsio` 1:4.7.0-1
+- `cifs-utils` 7.9-1
+- `convertlit` 1.8-13
+- `cxx-rust-cssparser` 1.1.0-1
+- `dav1d` 1.5.4-1
+- `db5.3` 5.3.28-7
+- `dconf` 51.0-1
+- `ddcutil` 3.0.2-1
+- `default-cursors` 3-1
+- `dolphin` 26.08.3-1
+- `double-conversion` 3.4.0-1
+- `ebook-tools` 0.2.2-9
+- `editorconfig-core-c` 0.12.11-1
+- `exiv2` 0.28.9-1
+- `ffmpeg` 2:9.0.2-2
+- `fftw` 3.3.11-1
+- `flac` 1.5.0-1
+- `fontconfig` 2:2.18.3-2
+- `frameworkintegration` 6.31.0-1
+- `freetype2` 2.15.0-1
+- `fribidi` 1.0.18-1
+- `fuse3` 3.18.3-1
+- `gdk-pixbuf2` 2.44.8-1
+- `giflib` 6.1.3-2
+- `glslang` 1:1.4.363.0-1
+- `glycin` 2.2.6-1
+- `gperftools` 2.19.2-1
+- `gpgmepp` 2.2.0-1
+- `graphene` 1.10.8-2
+- `graphite` 1:1.3.15-1
+- `gsettings-desktop-schemas` 51.0-1
+- `gsettings-system-schemas` 51.0-1
+- `gsm` 1.0.24-1
+- `gst-plugins-base-libs` 1.28.8-1
+- `gstreamer` 1.28.8-1
+- `gtest` 1.18.0-1
+- `gumbo-parser` 0.14.1-1
+- `harfbuzz` 15.1.0-1
+- `hdf5` 2.2.0-1
+- `hicolor-icon-theme` 0.18-1
+- `hidapi` 0.15.0-1
+- `highway` 1.4.0-1
+- `hunspell` 1.7.6-1
+- `hwloc` 2.15.0-1
+- `i2c-tools` 4.4-4
+- `iio-sensor-proxy` 3.9-1
+- `imath` 3.2.3-1
+- `iso-codes` 4.20.1-1
+- `jack2` 1.9.22-2
+- `jbigkit` 2.2-1
+- `json-glib` 1.10.8-1
+- `kactivitymanagerd` 6.8.2-1
+- `karchive` 6.31.0-1
+- `kauth` 6.31.0-1
+- `kbookmarks` 6.31.0-1
+- `kcmutils` 6.31.0-1
+- `kcodecs` 6.31.0-1
+- `kcolorscheme` 6.31.0-1
+- `kcompletion` 6.31.0-1
+- `kconfig` 6.31.0-1
+- `kconfigwidgets` 6.31.0-1
+- `kcoreaddons` 6.31.0-1
+- `kcrash` 6.31.0-1
+- `kdbusaddons` 6.31.0-1
+- `kde-cli-tools` 6.8.2-1
+- `kdeclarative` 6.31.0-1
+- `kdecoration` 6.8.2-1
+- `kded` 6.31.0-1
+- `kdesu` 6.31.0-1
+- `kdnssd` 6.31.0-1
+- `kdsoap` 2.3.0-1
+- `kdsoap-ws-discovery-client` 0.4.0-3
+- `kfilemetadata` 6.31.0-1
+- `kglobalaccel` 6.31.0-1
+- `kglobalacceld` 6.8.2-1
+- `kguiaddons` 6.31.0-1
+- `kholidays` 1:6.31.0-1
+- `ki18n` 6.31.0-1
+- `kiconthemes` 6.31.0-1
+- `kidletime` 6.31.0-1
+- `kimageformats` 6.31.0-1
+- `kio` 6.31.0-1
+- `kio-extras` 26.08.3-1
+- `kio-fuse` 5.1.1-2
+- `kirigami` 6.31.0-1
+- `kirigami-addons` 1.16.1-1
+- `kitemmodels` 6.31.0-1
+- `kitemviews` 6.31.0-1
+- `kjobwidgets` 6.31.0-1
+- `kmenuedit` 6.8.2-1
+- `knewstuff` 6.31.0-1
+- `knighttime` 6.8.2-1
+- `knotifications` 6.31.0-1
+- `knotifyconfig` 6.31.0-1
+- `konsole` 26.08.3-1
+- `kpackage` 6.31.0-1
+- `kparts` 6.31.0-1
+- `kpipewire` 6.8.2-1
+- `kpty` 6.31.0-1
+- `kquickcharts` 6.31.0-1
+- `krunner` 6.31.0-1
+- `kscreen` 6.8.2-1
+- `kscreenlocker` 6.8.2-1
+- `kservice` 6.31.0-1
+- `kstatusnotifieritem` 6.31.0-1
+- `ksvg` 6.31.0-1
+- `ksystemstats` 6.8.2-1
+- `ktexteditor` 6.31.0-1
+- `ktextwidgets` 6.31.0-1
+- `kunitconversion` 6.31.0-1
+- `kuserfeedback` 6.31.0-1
+- `kwallet` 6.31.0-1
+- `kwayland` 6.8.2-1
+- `kwidgetsaddons` 6.31.0-1
+- `kwin` 6.8.2-2
+- `kwindowsystem` 6.31.0-1
+- `kxmlgui` 6.31.0-1
+- `l-smash` 2.14.5-4
+- `lame` 4.0-1
+- `layer-shell-qt` 6.8.2-1
+- `lcms2` 2.20-1
+- `ldb` 2:4.25.1-1
+- `libaec` 1.1.7-1
+- `libass` 0.17.5-1
+- `libasyncns` 1:0.8+r3+g68cd5af-3
+- `libatasmart` 0.19-8
+- `libavc1394` 0.5.4-7
+- `libb2` 0.98.1-3
+- `libblake3` 1.8.7-1
+- `libblockdev` 3.5.0-2
+- `libblockdev-crypto` 3.5.0-2
+- `libblockdev-fs` 3.5.0-2
+- `libblockdev-loop` 3.5.0-2
+- `libblockdev-mdraid` 3.5.0-2
+- `libblockdev-nvme` 3.5.0-2
+- `libblockdev-part` 3.5.0-2
+- `libblockdev-smart` 3.5.0-2
+- `libblockdev-swap` 3.5.0-2
+- `libbluray` 1.5.1-1
+- `libbs2b` 3.1.0-11
+- `libbsd` 0.12.2-2
+- `libbytesize` 2.12-3
+- `libcanberra` 1:0.30+r2+gc0620e4-6
+- `libcgif` 0.5.4-1
+- `libcups` 2:2.4.20-1
+- `libdatrie` 0.2.14-1
+- `libdecor` 0.2.5-1
+- `libdeflate` 1.26-1
+- `libdisplay-info` 0.3.0-1
+- `libdmtx` 0.7.8-1
+- `libdovi` 3.4.0-1
+- `libdrm` 2.4.134-1
+- `libdvdnav` 7.0.0-1
+- `libdvdread` 7.1.1-1
+- `libebur128` 1.2.6-2
+- `libei` 1.6.0-2
+- `libepoxy` 1.5.10-3
+- `libevdev` 1.14.0-1
+- `libexif` 0.6.26-1
+- `libfdk-aac` 3.0.0-1
+- `libfontenc` 1.1.9-1
+- `libfreeaptx` 0.2.2-1
+- `libfyaml` 0.9.6-3
+- `libglvnd` 1.7.0-3
+- `libgudev` 238-4
+- `libice` 1.1.2-1
+- `libiec61883` 1.2.0-9
+- `libimagequant` 4.4.1-2
+- `libimobiledevice` 1.4.0-2
+- `libimobiledevice-glue` 1.3.2-1
+- `libinput` 1.32.0-1
+- `libjpeg-turbo` 3.2.1-1
+- `libjxl` 0.12.0-1
+- `libkexiv2` 26.08.3-1
+- `libkscreen` 6.8.2-1
+- `libksysguard` 6.8.2-1
+- `liblc3` 1.1.3-2
+- `libldac` 2.0.2.6-1
+- `libmatio` 1.5.30-1
+- `libmbim` 1.34.0-2
+- `libmd` 1.3.0-1
+- `libmodplug` 0.8.9.0-7
+- `libmtp` 1.1.23-1
+- `libmysofa` 1.3.5-1
+- `libnvme` 1.16.2-2
+- `libogg` 1.3.6-1
+- `libopenmpt` 0.8.10-1
+- `libpciaccess` 0.19-1
+- `libpipewire` 1:1.6.10-1
+- `libplacebo` 7.360.1-7
+- `libplasma` 6.8.2-1
+- `libplist` 2.7.0-3
+- `libpng` 1.6.59-1
+- `libproxy` 0.5.12-1
+- `libpulse` 17.0+r134+g77d25a1e6-1
+- `libqaccessibilityclient-qt6` 0.6.0-4
+- `libqalculate` 5.13.2-1
+- `libqmi` 1.38.0-2
+- `libqrtr-glib` 1.4.0-2
+- `libraw` 0.22.3-1
+- `libraw1394` 2.1.2-4
+- `librsvg` 2:2.63.4-1
+- `libsamplerate` 0.2.2-3
+- `libsm` 1.2.6-1
+- `libsndfile` 1.2.2-4
+- `libsoxr` 0.1.3-5
+- `libssc` 0.4.4-1
+- `libssh` 0.12.2-1
+- `libstemmer` 3.2.0-1
+- `libtatsu` 1.0.5-1
+- `libthai` 0.1.30-1
+- `libtheora` 1.2.0-1
+- `libtiff` 4.7.2-2
+- `libtommath` 1.3.0-2
+- `libtool` 2.6.2-5
+- `libunibreak` 7.0-1
+- `libunwind` 1.8.3-1
+- `liburing` 2.15-1
+- `libusbmuxd` 2.1.1-2
+- `libutempter` 1.2.3-1
+- `libva` 2.24.1-1
+- `libvdpau` 1.5-4
+- `libvips` 8.18.7-1
+- `libvorbis` 1.3.7-4
+- `libvpl` 2.17.0-1
+- `libvpx` 1.17.0-1
+- `libwacom` 2.20.0-1
+- `libwbclient` 2:4.25.1-1
+- `libwebp` 1.6.0-2
+- `libwireplumber` 0.5.18-1
+- `libx11` 1.8.14-1
+- `libxau` 1.0.12-1
+- `libxaw` 1.0.16-2
+- `libxcb` 1.17.0-1
+- `libxcursor` 1.2.3-1
+- `libxcvt` 0.1.3-1
+- `libxdmcp` 1.1.5-2
+- `libxext` 1.3.7-1
+- `libxfixes` 6.0.2-1
+- `libxfont2` 2.0.9-1
+- `libxft` 2.3.9-1
+- `libxi` 1.8.4-1
+- `libxkbcommon` 1.13.2-1
+- `libxkbcommon-x11` 1.13.2-1
+- `libxkbfile` 1.2.0-1
+- `libxmlb` 0.3.29-1
+- `libxmu` 1.3.1-1
+- `libxpm` 3.5.20-1
+- `libxrandr` 1.5.5-1
+- `libxrender` 0.9.13-1
+- `libxshmfence` 1.3.3-1
+- `libxslt` 1.1.45-2
+- `libxt` 1.3.1-1
+- `libxtst` 1.2.6-1
+- `libxv` 1.0.13-1
+- `libxxf86vm` 1.1.7-1
+- `libzip` 1.11.4-1
+- `lilv` 0.28.0-1
+- `litehtml` 0.10-2
+- `llvm-libs` 23.1.4-1
+- `lm_sensors` 1:3.6.2-1
+- `lua` 5.5.1-1
+- `lua54` 5.4.9-1
+- `lv2` 1.18.10-2
+- `md4c` 0.6.0-2
+- `mdadm` 4.6-2
+- `media-player-info` 26-1
+- `mesa` 1:26.2.6-1
+- `milou` 6.8.2-1
+- `modemmanager` 1.24.2-2
+- `modemmanager-qt` 6.31.0-1
+- `mpg123` 1.33.7-1
+- `mtdev` 1.1.7-1
+- `networkmanager-qt` 6.31.0-1
+- `noto-fonts` 1:2026.11.01-1
+- `noto-fonts-emoji` 1:20260924-1
+- `numactl` 2.0.19-1
+- `ocean-sound-theme` 6.8.2-1
+- `ocl-icd` 2.3.5-1
+- `onetbb` 2023.2.0-1
+- `opencore-amr` 0.1.6-2
+- `openexr` 3.5.3-3
+- `openjpeg2` 2.5.4-1
+- `openjph` 0.33.0-1
+- `opus` 1.6.1-1
+- `orc` 0.4.44-1
+- `pango` 1:1.58.2-1
+- `perl` 5.44.0-1
+- `pipewire` 1:1.6.10-1
+- `pipewire-audio` 1:1.6.10-1
+- `pipewire-pulse` 1:1.6.10-1
+- `pixman` 0.46.4-1
+- `plasma-activities` 6.8.2-1
+- `plasma-activities-stats` 6.8.2-1
+- `plasma-desktop` 6.8.2-1
+- `plasma-integration` 6.8.2-1
+- `plasma-nm` 6.8.2-1
+- `plasma-pa` 6.8.2-1
+- `plasma-workspace` 6.8.2-1
+- `plasma5support` 6.8.2-1
+- `polkit-kde-agent` 6.8.2-1
+- `polkit-qt6` 0.201.1-1
+- `poppler` 26.10.0-2
+- `poppler-qt6` 26.10.0-2
+- `portaudio` 1:19.7.0-4
+- `powerdevil` 6.8.2-1
+- `ppp` 2.5.5-1
+- `prison` 6.31.0-1
+- `protobuf` 36.1-1
+- `protobuf-c` 1.5.2-15
+- `pulseaudio-qt` 1.9.0-1
+- `python-pyqt6` 6.12.0-2
+- `python-pyqt6-sip` 13.13.0-1
+- `qca-qt6` 2.3.12-1
+- `qcoro` 0.13.0-2
+- `qqc2-breeze-style` 6.8.2-1
+- `qqc2-desktop-style` 6.31.0-1
+- `qrencode` 4.1.1-4
+- `qt6-5compat` 6.12.0-1
+- `qt6-base` 6.12.0-3
+- `qt6-declarative` 6.12.0-4
+- `qt6-location` 6.12.0-1
+- `qt6-multimedia` 6.12.0-1
+- `qt6-multimedia-ffmpeg` 6.12.0-1
+- `qt6-positioning` 6.12.0-1
+- `qt6-shadertools` 6.12.0-1
+- `qt6-speech` 6.12.0-1
+- `qt6-svg` 6.12.0-1
+- `qt6-tools` 6.12.0-1
+- `qt6-translations` 6.12.0-1
+- `qt6-virtualkeyboard` 6.12.0-1
+- `qt6-websockets` 6.12.0-1
+- `qtkeychain-qt6` 0.17.0-1
+- `rav1e` 0.8.1-3
+- `ripgrep` 15.2.0-1
+- `ripgrep-all` 0.10.10-3
+- `rubberband` 4.0.0-2
+- `sbc` 2.2-1
+- `sddm` 0.21.0-7
+- `sdl2-compat` 2.32.74-1
+- `sdl3` 3.4.18-1
+- `serd` 0.32.10-1
+- `shaderc` 2026.4-1
+- `shared-mime-info` 2.5.1-2
+- `smbclient` 2:4.25.1-1
+- `snappy` 1.3.1-1
+- `sndio` 1.10.0-1
+- `solid` 6.31.0-1
+- `sonnet` 6.31.0-1
+- `sord` 0.16.22-1
+- `sound-theme-freedesktop` 0.8-6
+- `spandsp` 0.0.6-7
+- `speex` 1.2.1-3
+- `speexdsp` 1.2.1-3
+- `spirv-tools` 1:1.4.363.0-1
+- `sratom` 0.6.22-1
+- `srt` 1.5.7-2
+- `svt-av1` 4.2.0-1
+- `syndication` 6.31.0-1
+- `syntax-highlighting` 6.31.0-1
+- `systemsettings` 6.8.2-1
+- `taglib` 2.3.2-1
+- `talloc` 2.5.0-2
+- `tdb` 1.4.15-2
+- `tevent` 1:0.17.2-2
+- `tslib` 1.24-1
+- `ttf-dejavu` 2.37+18+g9b5d1b2f-8
+- `ttf-hack` 3.003-7
+- `udisks2` 2.11.2-1
+- `union` 6.8.2-1
+- `upower` 1.91.5-1
+- `v4l-utils` 1.32.0-2
+- `vapoursynth` 81-1
+- `vid.stab` 1.1.2-1
+- `vmaf` 3.2.1-1
+- `volume_key` 0.3.12-12
+- `vulkan-icd-loader` 1.4.363.0-1
+- `wayland` 1.26.0-1
+- `webrtc-audio-processing-1` 1.3-6
+- `wireplumber` 0.5.18-1
+- `x264` 3:0.165.r3222.b35605a-2
+- `x265` 4.3-1
+- `xcb-proto` 1.17.0-4
+- `xcb-util` 0.4.1-2
+- `xcb-util-cursor` 0.1.6-1
+- `xcb-util-image` 0.4.1-3
+- `xcb-util-keysyms` 0.4.1-5
+- `xcb-util-renderutil` 0.3.10-2
+- `xcb-util-wm` 0.4.2-2
+- `xdg-desktop-portal` 1.22.1-2
+- `xdg-desktop-portal-kde` 6.8.2-1
+- `xdg-user-dirs` 0.20-1
+- `xdg-utils` 1.2.1-2
+- `xf86-input-libinput` 1.5.0-1
+- `xkeyboard-config` 2.49-1
+- `xorg-fonts-encodings` 1.1.0-2
+- `xorg-server` 21.1.25-2
+- `xorg-server-common` 21.1.25-2
+- `xorg-setxkbmap` 1.3.5-1
+- `xorg-xauth` 1.1.5-1
+- `xorg-xkbcomp` 1.5.0-1
+- `xorg-xmessage` 1.0.7-2
+- `xorg-xprop` 1.2.8-1
+- `xorg-xrdb` 1.2.3-1
+- `xorg-xwayland` 24.1.14-1
+- `xorgproto` 2026.1-1
+- `xvidcore` 1.3.7-4
+- `zimg` 3.0.6-2
+- `zint` 2.16.0-2
+- `zix` 0.8.2-1
+- `zxing-cpp` 3.1.1-1
+

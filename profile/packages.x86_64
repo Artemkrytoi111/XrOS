@@ -1,0 +1,74 @@
+# XrOS — пакеты живой системы (x86_64).
+# Принцип: только то, что реально нужно живой системе и установке.
+# Никаких AI-зависимостей и программ «ради количества».
+#
+# База Arch
+amd-ucode
+arch-install-scripts
+base
+bash-completion
+dialog
+grub
+intel-ucode
+less
+linux
+linux-firmware
+mkinitcpio
+mkinitcpio-archiso
+nano
+sudo
+# Диски и загрузка
+# (syslinux здесь НЕТ: загрузчик XrOS — только GRUB,
+#  BIOS i386-pc и UEFI x86_64-efi; syslinux удалён из списка.)
+dosfstools
+e2fsprogs
+btrfs-progs
+xfsprogs
+efibootmgr
+gptfdisk
+parted
+rsync
+os-prober
+ntfs-3g
+# Сеть
+dhcpcd
+iw
+iwd
+networkmanager
+openssh
+wpa_supplicant
+# KDE Plasma — живая система (Plasma 6.8, только Wayland).
+# ВНИМАНИЕ: пакета plasma-x11-session в Arch больше нет —
+# Plasma 6.8 убрала X11-сессию полностью (plasma-workspace 6.8.2
+# конфликтует с plasma-x11-session), а сам пакет удалён из
+# репозиториев. Живая система — Plasma (Wayland); X11-приложения
+# работают через XWayland (зависимость plasma-workspace).
+# Прежняя причина держать X11 (чёрный экран Wayland в QEMU)
+# относилась к Plasma 6.4 и требует повторной проверки в QEMU
+# перед сборкой — см. AUDIT-REPORT.md.
+plasma-desktop
+plasma-nm
+plasma-pa
+kscreen
+sddm
+konsole
+dolphin
+# Звук: plasma-pa без звукового сервера молчит — нужен провайдер
+# pulse-native-provider (pipewire-pulse) и менеджер сессии
+# pipewire-session-manager (wireplumber, требует и kwin).
+pipewire
+pipewire-pulse
+wireplumber
+# Шрифты и графика
+# (breeze и mesa явно не нужны: их тянет kwin — breeze даёт
+#  BreezeDark и breeze_cursors, mesa — драйверы GL для QEMU/железа.
+#  xorg-server оставлен до повторной проверки Wayland в QEMU:
+#  в Plasma 6.8 от него ничего не зависит, кандидат на удаление.)
+ttf-dejavu
+noto-fonts
+xorg-server
+# Приветствие и установщик
+python-pyqt6
+libxkbcommon-x11
+# Безопасность
+ufw

@@ -1,0 +1,69 @@
+# XrOS — тема GRUB.
+# Фирменная система 10.11.2026: фон #08080D, доп. фон #111018,
+# акцент #8B00FF, второй акцент #B66AFF, текст #F5F3FA,
+# вторичный текст #A6A0B3, границы #30283B.
+# Шрифты DejaVu есть в live-системе (пакет ttf-dejavu).
+# Проверка на этапе 2: grub-mkconfig в chroot + скриншот меню в QEMU.
+
+title-text: "XrOS 1.0"
+title-font: "DejaVu Sans Bold 16"
+title-color: "#ffffff"
+desktop-image: "grub-bg.jpg"
+desktop-color: "#08080d"
+terminal-box: "terminal_box_*.png"
+
++ boot_menu {
+  left = 25%
+  top = 30%
+  width = 50%
+  height = 45%
+  item_font = "DejaVu Sans 14"
+  item_color = "#f5f3fa"
+  # selected_item_color: был #b66aff — контраст 1,83:1 на фоне #8b00ff
+  # (select_*.png), нечитаемо. #f5f3fa даёт 5,39:1 (исправлено 10.11.2026).
+  selected_item_color = "#f5f3fa"
+  item_height = 30
+  item_padding = 8
+  item_spacing = 6
+  icon_width = 24
+  icon_height = 24
+  item_icon_space = 10
+  selected_item_pixmap_style = "select_*.png"
+}
+
++ label {
+  top = 88%
+  left = 25%
+  width = 50%
+  align = "center"
+  text = "XrOS — на базе Arch Linux"
+  font = "DejaVu Sans 12"
+  color = "#a6a0b3"
+}
+
++ progress_bar {
+  id = "__timeout__"
+  left = 25%
+  top = 82%
+  width = 50%
+  height = 8
+  fg_color = "#8b00ff"
+  bg_color = "#111018"
+  border_color = "#111018"
+}
+
+# Таймаут — отдельным label: @TIMEOUT@ подставляется ТОЛЬКО
+# в тексте label с id "__timeout__"; в text у progress_bar
+# GRUB его не подставляет (на экране был литерал «@TIMEOUT@»,
+# fixed3, 10.11.2026).
++ label {
+  id = "__timeout__"
+  left = 25%
+  top = 84%
+  width = 50%
+  height = 20
+  text = "Автозагрузка через @TIMEOUT@ с"
+  font = "DejaVu Sans 12"
+  color = "#a6a0b3"
+  align = "center"
+}

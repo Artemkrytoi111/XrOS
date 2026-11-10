@@ -1,0 +1,1099 @@
+#!/usr/bin/env bash
+# XrOS — установщик (консольный, bash+dialog).
+# Работает из живой системы XrOS: размечает диск, копирует систему,
+# ставит GRUB, создаёт пользователя.
+#
+# Два режима:
+#  * интерактивный (по умолчанию) — диалоги dialog;
+#  * неинтерактивный — для графического установщика (xros-install-gui):
+#    XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF=/tmp/xros-install.conf xros-install
+#    Конфиг — файл KEY='value' (права 600, создаёт GUI, установщик удаляет
+#    его после чтения). Значения: DISK, PARTMODE (erase|manual),
+#    ROOT_PART, EFI_PART, FS (ext4|btrfs|xfs), HOSTNAME, FULLNAME, USERNAME,
+#    USERPASS, ROOTPASS, AUTOLOGIN (0|1), TIMEZONE, KEYMAP, DE, OFFICE.
+#    Прогресс в неинтерактивном режиме пишется в stdout в формате
+#    dialog-gauge (число = процент, XXX = сообщение) и в /tmp/xros-install.log.
+set -u -o pipefail
+# umask 077: журнал установки и любые файлы, создаваемые движком,
+# не должны быть читаемы другими пользователями (в конфиге — пароли).
+umask 077
+export LC_ALL=C.UTF-8
+export LANG=ru_RU.UTF-8
+
+TITLE="XrOS 1.0 — Установщик"
+BACKTITLE="XrOS  •  на базе Arch Linux"
+TARGET="/mnt/xros-install"
+LOG="/tmp/xros-install.log"
+# Симлинк в /tmp вместо журнала — классическая атака: `: >` пошёл бы
+# по ссылке от root и зачистил бы чужой файл. Убираем ссылку заранее.
+[[ -L "$LOG" ]] && rm -f "$LOG"
+: > "$LOG"
+chmod 600 "$LOG"
+# Остаток прошлого запуска (de-result мог остаться после обрыва) —
+# зачищаем в начале, а не только в cleanup.
+rm -f /tmp/xros-de-result
+
+BANNER=$(cat /usr/share/xros/banner.txt 2>/dev/null || echo "XrOS 1.0")
+
+say() { echo "[xros-install] $*" | tee -a "$LOG"; }
+
+dlg() { dialog --backtitle "$BACKTITLE" --title "$TITLE" --colors "$@" 2>&1 >/dev/tty; }
+
+NONINTERACTIVE="${XROS_NONINTERACTIVE:-}"
+
+if [[ $EUID -ne 0 ]]; then
+  # Живая система работает под пользователем xros с passwordless sudo —
+  # установщик сам поднимает права, пароль не спрашивает.
+  if command -v sudo >/dev/null 2>&1; then
+    # --preserve-env: без него sudo стирает XROS_NONINTERACTIVE и
+    # XROS_INSTALL_CONF, и GUI-режим молча превращался бы в интерактивный.
+    exec sudo --preserve-env=XROS_NONINTERACTIVE,XROS_INSTALL_CONF "$0" "$@"
+  else
+    echo "Запустите установщик от root: sudo xros-install"
+    exit 1
+  fi
+fi
+if [[ ! -d /run/archiso/bootmnt && ! -f /run/archiso/airootfs/etc/os-release ]]; then
+  if [[ -z "$NONINTERACTIVE" ]]; then
+    dialog --backtitle "$BACKTITLE" --title "$TITLE" --msgbox "Внимание: это не похоже на живую систему XrOS.\nУстановка будет копировать текущую систему (/)." 10 60
+  else
+    say "ВНИМАНИЕ: это не похоже на живую систему XrOS"
+  fi
+fi
+
+# --- XROS: защита дочернего процесса (начало) ---
+# Движок — дочерний процесс графического установщика. Если GUI умирает
+# (падение, kill извне), движок НЕ должен продолжать форматирование /
+# копирование системы без интерфейса. GUI страхует это с двух сторон
+# (см. src/xros-install-gui-rs/src/install.rs):
+#  * PR_SET_PDEATHSIG: ядро шлёт нам SIGTERM, как только умирает родитель;
+#  * отдельная группа процессов (setsid): при штатной отмене GUI шлёт
+#    SIGTERM всей группе, гася и rsync / arch-chroot / mkfs.
+# Здесь — вторая половина договора: по SIGHUP/SIGTERM/SIGINT
+# останавливаемся, гасим своих потомков, размонтируем $TARGET,
+# удаляем временные файлы и пишем причину остановки в журнал.
+# Ловушки ставятся ПОСЛЕ перевыполнения через sudo выше: exec
+# сбрасывает ловушки, поэтому ставить их раньше бессмысленно.
+XROS_CLEANUP_DONE=0
+XROS_STOP_REASON=""
+# Флаг «идёт установка»: ставится в начале run_install, снимается
+# только на успешном пути. Нужен ловушке EXIT (ниже): чистить надо
+# только при обрыве во время установки, а не при любом выходе
+# (например, при ранней ошибке валидации конфига чистить нечего).
+
+# Печатает pid всех потомков перечисленных pid (дети, внуки, ...).
+# ps --ppid находит только прямых детей, а arch-chroot прячет за собой
+# ещё один bash, поэтому идём по дереву, пока есть кого искать.
+xros_descendants() {
+  local frontier="$1" next pid kids out=""
+  frontier=$(printf '%s' "$frontier" | tr -s ' ' '\n' | grep -E '^[0-9]+$' || true)
+  while [[ -n "$frontier" ]]; do
+    next=""
+    for pid in $frontier; do
+      kids=$(ps -o pid= --ppid "$pid" 2>/dev/null | tr -s ' ' '\n' | grep -E '^[0-9]+$' || true)
+      for k in $kids; do
+        [[ "$k" == "$$" ]] && continue
+        out="$out $k"
+        next="$next $k"
+      done
+    done
+    frontier="$next"
+  done
+  printf '%s' "$out"
+}
+
+# Все процессы своей группы, кроме себя. Нужна для внуков, чей
+# родитель уже умер: они переродительствованны, и ps --ppid
+# их больше не находит.
+xros_group_members() {
+  ps -eo pid=,pgid= 2>/dev/null | awk -v g="$$" '$2 == g && $1 != g { print $1 }'
+}
+
+# Остановить потомков движка ДО размонтирования: иначе rsync/arch-chroot
+# продолжат писать в $TARGET уже после umount — и записи уйдут в живую
+# систему вместо целевого диска. Сначала SIGTERM, потом SIGKILL живым.
+xros_kill_children() {
+  local kids alive k g
+  # Сначала — всей своей группе (если мы её лидер: так запускает GUI
+  # через setsid): внуки, чей родитель уже умер, переродительствованны,
+  # и обход по --ppid их не находит (проверено тестом E6: писатель
+  # rsync пережил бы cleanup и продолжал писать в TARGET).
+  # Себя не трогаем: SIGTERM себе во время cleanup убил бы нас
+  # на середине размонтирования (в обработчике ловушки уже сняты).
+  if [[ -n "${XROS_PGID:-}" && "$XROS_PGID" == "$$" ]]; then
+    for g in $(xros_group_members); do kill -TERM "$g" 2>/dev/null || true; done
+  fi
+  kids=$(xros_descendants "$$")
+  if [[ -n "${kids// }" ]]; then
+    # shellcheck disable=SC2086
+    kill -TERM $kids 2>/dev/null || true
+    sleep 2
+    alive=""
+    for k in $kids; do
+      kill -0 "$k" 2>/dev/null && alive="$alive $k"
+    done
+    if [[ -n "${alive// }" ]]; then
+      # shellcheck disable=SC2086
+      kill -KILL $alive 2>/dev/null || true
+    fi
+  else
+    # Детей в дереве нет, но группе всё равно даём время на SIGTERM,
+    # иначе umount ниже прошёл бы при ещё живом писателе.
+    sleep 2
+  fi
+  # Добить группу: кто пережил SIGTERM (игнорирует его).
+  if [[ -n "${XROS_PGID:-}" && "$XROS_PGID" == "$$" ]]; then
+    for g in $(xros_group_members); do kill -KILL "$g" 2>/dev/null || true; done
+  fi
+}
+
+# Идемпотентная очистка: флаг XROS_CLEANUP_DONE + снятие ловушек
+# в обработчике (см. ниже) не дают вызвать её дважды — повторный вызов
+# просто выходит, ничего не ломая и не завершая процесс второй раз.
+# Успешный путь установки cleanup не вызывает: там размонтирование
+# уже делается в конце run_install; флаг нужен только для сигналов.
+xros_cleanup() {
+  [[ "$XROS_CLEANUP_DONE" == "1" ]] && return 0
+  XROS_CLEANUP_DONE=1
+  say "Остановка установки (${XROS_STOP_REASON:-без указания причины}) — очистка..."
+  xros_kill_children
+  umount -R "$TARGET" 2>/dev/null || true
+  rm -f /tmp/xros-de-result /tmp/xros-install.conf
+  sync 2>/dev/null || true
+  say "Очистка завершена: $TARGET размонтирован, временные файлы удалены"
+}
+
+xros_on_signal() {
+  local sig="$1"
+  # Первым делом ИГНОРИРОВАТЬ сигналы на время очистки. `trap -`
+  # возвращал бы действия по умолчанию — и повторный SIGTERM
+  # (двойная отмена из GUI: два cancel() подряд) убивал бы нас
+  # на середине umount, до «Очистка завершена» (проверено тестом E7).
+  # `trap ''` — именно игнор: повторный сигнал просто теряется,
+  # а cleanup завершается и выходит с кодом сигнала как положено.
+  trap '' HUP TERM INT
+  case "$sig" in
+    HUP)  XROS_STOP_REASON="SIGHUP (терминал/родитель закрыт)" ;;
+    TERM) XROS_STOP_REASON="SIGTERM (родитель завершён или отмена из GUI)" ;;
+    INT)  XROS_STOP_REASON="SIGINT (прерывание, Ctrl+C)" ;;
+    *)    XROS_STOP_REASON="сигнал $sig" ;;
+  esac
+  xros_cleanup
+  # В неинтерактивном режиме GUI ждёт маркер в stdout: без него
+  # InstallEvent::Finished придёт только по закрытию pipe + wait(),
+  # а явный маркер даёт GUI точный статус сразу. В интерактивном
+  # режиме stdout — это dialog --gauge, маркер туда нельзя.
+  if [[ -n "${NONINTERACTIVE:-}" ]]; then
+    echo "INSTALL_FAILED"
+  fi
+  case "$sig" in
+    HUP) exit 129 ;;
+    INT) exit 130 ;;
+    *) exit 143 ;;
+  esac
+}
+trap 'xros_on_signal HUP' HUP
+trap 'xros_on_signal TERM' TERM
+trap 'xros_on_signal INT' INT
+
+# Сторож родителя (фоновая проверка «родитель жив»).
+# PDEATHSIG будит только сам движок, а ловушка bash НЕ выполняется,
+# пока движок ждёт внешнюю команду на переднем плане (rsync, mkfs,
+# pacman в chroot): сигнал повиснет до конца этой команды (минуты).
+# Поэтому сторож раз в секунду смотрит, не сменился ли наш родитель
+# (после смерти GUI нас переродительствовали, PPID стал другим),
+# и шлёт SIGTERM всей группе: внешние команды умирают сразу,
+# а ловушка движка выполняется, как только они завершились.
+# Сторож запускается, только если движок — лидер своей группы
+# (pgid == $$: так делает GUI через setsid; в интерактивном запуске
+# из терминала — job control). Иначе SIGTERM группе мог бы задеть
+# чужие процессы (например, оболочку, из которой запустили движок).
+XROS_WATCHDOG_PID=""
+xros_watchdog() {
+  local parent="$1" pgid="$2" cur="" st=""
+  while true; do
+    sleep 1
+    cur=$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ' || true)
+    st=$(ps -o stat= -p $$ 2>/dev/null | tr -d ' ' || true)
+    [[ -z "$cur" ]] && break
+    # Зомби: движок уже мёртв, но родитель ещё не сделал wait() —
+    # ppid зомби при этом НЕ меняется, и без проверки состояния
+    # сторож крутился бы вечно, а GUI ждал бы EOF трубы, которую
+    # держат живые внуки (взаимный deadlock, проверено тестом E5).
+    [[ "$st" == Z* ]] && break
+    [[ "$cur" == "$parent" ]] || break
+  done
+  kill -TERM -"$pgid" 2>/dev/null || true
+}
+XROS_PGID=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || true)
+if [[ -n "$XROS_PGID" && "$XROS_PGID" == "$$" ]]; then
+  xros_watchdog "$PPID" "$XROS_PGID" &
+  XROS_WATCHDOG_PID=$!
+  # При штатном выходе движка сторож больше не нужен: глушим его,
+  # иначе он переживёт движок и при следующем... нет, после выхода
+  # движка его PPID всё равно сменится, и он послал бы SIGTERM
+  # группе, в которой уже никого нет. Всё равно глушим явно —
+  # глушение сторожа входит в общую ловушку EXIT ниже.
+fi
+
+# Ловушка EXIT — страховка от обрыва НЕ сигналом: любой `exit 1`
+# из run_install (явная проверка `|| { ...; exit 1; }`) раньше
+# оставлял $TARGET смонтированным и временные файлы на месте —
+# ловушки на сигналы такой выход не ловят. Теперь при ненулевом
+# коде во время установки делаем тот же cleanup, что и по сигналу
+# (идемпотентный: повторный вызов — no-op по XROS_CLEANUP_DONE;
+# при выходе из xros_on_signal флаг уже стоит, двойной очистки нет).
+# На успешном пути (rc=0 или установка ещё не начиналась) —
+# только глушим сторожа.
+xros_on_exit() {
+  local rc=$?
+  [[ -n "${XROS_WATCHDOG_PID:-}" ]] && kill "$XROS_WATCHDOG_PID" 2>/dev/null || true
+  if [[ $rc -ne 0 && "${XROS_INSTALLING:-0}" == "1" && "$XROS_CLEANUP_DONE" != "1" ]]; then
+    XROS_STOP_REASON="ошибка установки (код $rc)"
+    xros_cleanup
+    # Без маркера GUI узнал бы об ошибке только по закрытию pipe +
+    # wait() — а явный INSTALL_FAILED даёт точный статус сразу.
+    # Ветка `run_install || RC=$?` ниже до этого места не доходит:
+    # `exit 1` из run_install убивает скрипт сразу, и только
+    # ловушка EXIT ловит этот выход (проверено тестами E6/E8/E9).
+    # В интерактивном режиме маркер в stdout нельзя (там dialog).
+    if [[ -n "${NONINTERACTIVE:-}" ]]; then
+      echo "INSTALL_FAILED"
+    fi
+  fi
+}
+trap xros_on_exit EXIT
+# --- XROS: защита дочернего процесса (конец) ---
+
+# --- XROS: защита диска (начало) ---
+# Три проверки, которых не хватало первому аудиту:
+#  1. Идентификатор устройства: между выбором диска и форматированием
+#     проходят диалоги/шаги GUI — за это время диск могли переткнуть,
+#     переименовать (/dev/sdX -> /dev/sdY) или переразметить. Одно имя
+#     /dev-пути этому не препятствует, поэтому запоминаем стабильный
+#     идентификатор (путь в sysfs + таблица разделов + PARTUUID)
+#     и перепроверяем его непосредственно перед разрушительной
+#     операцией (см. xros_verify_identity в run_install).
+#  2. Смонтированные разделы: форматировать смонтированный раздел
+#     нельзя — в первую очередь это сам ISO-носитель
+#     (/run/archiso/bootmnt). Проверка не зависит от ISODISK, поэтому
+#     закрывает и случай пустого ISODISK (нештатная загрузка).
+#  3. Тип устройства: в ручном режиме корень и EFI обязаны быть
+#     разделами (TYPE=part), а EFI — FAT; иначе mkfs отформатировал
+#     бы целый диск, переданный как «раздел».
+
+# Стабильный идентификатор устройства: путь в sysfs (не меняется при
+# переименовании /dev-имени, меняется при перетыкании), плюс вывод
+# lsblk (размер, тип, ФС, таблица разделов) и PARTUUID для разделов.
+# Устройства нет — «MISSING:...»: такая строка никогда не совпадёт
+# с сохранённой, и проверка ниже прервёт установку.
+xros_dev_identity() {
+  local dev="$1" base sysfs info puuid
+  base=$(basename "$dev")
+  if [[ ! -b "$dev" ]]; then
+    printf 'MISSING:%s' "$dev"
+    return 0
+  fi
+  sysfs=$(readlink -f "/sys/class/block/$base" 2>/dev/null || true)
+  info=$(lsblk -n -o NAME,SIZE,TYPE,FSTYPE "$dev" 2>/dev/null | tr '\n' ';' || true)
+  puuid=$(blkid -s PARTUUID -o value "$dev" 2>/dev/null || true)
+  printf 'sysfs=%s|lsblk=%s|partuuid=%s' "${sysfs:-?}" "$info" "${puuid:-}"
+}
+
+# Перепроверить идентификатор непосредственно перед разрушительной
+# операцией. Несовпадение — жёсткий стоп ДО wipefs/mkfs.
+xros_verify_identity() {
+  local what="$1" dev="$2" expected="$3" got
+  got=$(xros_dev_identity "$dev")
+  if [[ "$got" != "$expected" ]]; then
+    say "ОШИБКА: $what изменился с момента выбора ($dev) — установка прервана, диск не тронут"
+    say "  было:   $expected"
+    say "  сейчас: $got"
+    exit 1
+  fi
+}
+
+# Есть ли смонтированные разделы у диска/раздела (кроме $TARGET,
+# который мы сами размонтировали перед проверкой)? 0 — есть.
+xros_has_mounts() {
+  local dev="$1" mp
+  while read -r mp; do
+    [[ -n "${mp// }" ]] || continue
+    case "$mp" in
+      "$TARGET"|"$TARGET"/*) continue ;;
+      *) return 0 ;;
+    esac
+  done < <(lsblk -n -o MOUNTPOINT "$dev" 2>/dev/null)
+  return 1
+}
+# --- XROS: защита диска (конец) ---
+
+# Форматирование корневого раздела под выбранную ФС.
+mkfs_root() {
+  local part="$1" fs="$2"
+  case "$fs" in
+    btrfs)
+      mkfs.btrfs -f -L XROS-OS "$part" >>"$LOG" 2>&1
+      ;;
+    xfs)
+      mkfs.xfs -f -L XROS-OS "$part" >>"$LOG" 2>&1
+      ;;
+    *) # ext4 — по умолчанию
+      mkfs.ext4 -F -L XROS-OS "$part" >>"$LOG" 2>&1
+      ;;
+  esac
+}
+
+# --- Выбор значений: диалоги или конфиг GUI ---
+if [[ -n "$NONINTERACTIVE" ]]; then
+  CONF="${XROS_INSTALL_CONF:-/tmp/xros-install.conf}"
+  [[ -f "$CONF" ]] || { say "ОШИБКА: нет файла настроек $CONF"; exit 1; }
+  # shellcheck disable=SC1090
+  set -a; . "$CONF"; set +a
+  rm -f "$CONF"
+  : "${PARTMODE:=erase}"
+  : "${FS:=ext4}"
+  : "${TIMEZONE:=Europe/Astrakhan}"
+  : "${KEYMAP:=ru}"
+  : "${AUTOLOGIN:=0}"
+  : "${OFFICE:=none}"
+  : "${DE:=kde}"
+  : "${FULLNAME:=${USERNAME:-xros}}"
+  [[ -n "${DISK:-}" || -n "${ROOT_PART:-}" ]] || { say "ОШИБКА: не задан диск/раздел"; exit 1; }
+  [[ -n "${USERNAME:-}" && -n "${USERPASS:-}" ]] || { say "ОШИБКА: не заданы пользователь/пароль"; exit 1; }
+  [[ -n "${ROOTPASS:-}" ]] || ROOTPASS="$USERPASS"
+  USERNAME=$(echo "$USERNAME" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_')
+  [[ -n "$USERNAME" ]] || USERNAME="xros"
+  # useradd не принимает имя, начинающееся с цифры.
+  [[ "$USERNAME" =~ ^[a-z_][a-z0-9_]*$ ]] || USERNAME="u$USERNAME"
+  [[ -n "${HOSTNAME:-}" ]] || HOSTNAME="xros-os"
+  # Имя компьютера — только безопасные символы: иначе перевод строки
+  # или пробелы из GUI сломали бы /etc/hostname и /etc/hosts.
+  HOSTNAME=$(printf '%s' "$HOSTNAME" | tr -cd 'a-zA-Z0-9.-')
+  [[ -n "$HOSTNAME" ]] || HOSTNAME="xros-os"
+  FULLNAME=$(printf '%s' "${FULLNAME:-}" | tr -d '\r\n')
+  case "${FS:-ext4}" in ext4|btrfs|xfs) ;; *) FS="ext4" ;; esac
+  # Часовой пояс и раскладка из конфига — не из фиксированного списка
+  # GUI: путь с `..` или перевод строки ломали бы localtime/vconsole.
+  if [[ ! "${TIMEZONE:-}" =~ ^[A-Za-z0-9_+/-]+$ || "${TIMEZONE:-}" == *..* || ! -f "/usr/share/zoneinfo/${TIMEZONE:-}" ]]; then
+    say "ВНИМАНИЕ: часовой пояс '${TIMEZONE:-}' недопустим, использую Europe/Astrakhan"
+    TIMEZONE="Europe/Astrakhan"
+  fi
+  [[ "${KEYMAP:-}" =~ ^[a-z0-9_-]+$ ]] || KEYMAP="ru"
+  # Защита от установки на диск с ISO (GUI уже фильтрует, страховка).
+  # Раньше проверка была только для erase: в ручном режиме можно было
+  # выбрать раздел на том же USB-диске, с которого загружен ISO,
+  # и отформатировать его.
+  ISODEV=$(findmnt -n -o SOURCE /run/archiso/bootmnt 2>/dev/null || true)
+  ISODISK=$(lsblk -n -o PKNAME "$ISODEV" 2>/dev/null || true)
+  if [[ -z "$ISODISK" ]]; then
+    # Пустой ISODISK — известное ограничение первого аудита. Теперь
+    # оно закрыто: перед разметкой run_install проверяет смонтированные
+    # разделы диска (а ISO-носитель всегда смонтирован в bootmnt),
+    # поэтому отформатировать его нельзя даже без ISODISK.
+    # Предупреждение остаётся в журнале для диагностики.
+    say "ВНИМАНИЕ: диск с ISO не определён (ISODISK пуст) — защита опирается на проверку смонтированных разделов"
+  fi
+  if [[ -n "$ISODISK" ]]; then
+    if [[ "$PARTMODE" == "erase" && "/dev/$ISODISK" == "$DISK" ]]; then
+      say "ОШИБКА: нельзя ставить на диск с ISO ($DISK)"
+      exit 1
+    fi
+    if [[ "$PARTMODE" == "manual" && -n "${ROOT_PART:-}" ]]; then
+      ROOTDISK=$(lsblk -n -o PKNAME "$ROOT_PART" 2>/dev/null || true)
+      if [[ -n "$ROOTDISK" && "/dev/$ISODISK" == "/dev/$ROOTDISK" ]]; then
+        say "ОШИБКА: нельзя ставить на диск с ISO ($ROOT_PART)"
+        exit 1
+      fi
+    fi
+  fi
+  if [[ "$PARTMODE" == "erase" ]]; then
+    [[ -b "${DISK:-}" ]] || { say "ОШИБКА: диск $DISK не найден"; exit 1; }
+    [[ "$(lsblk -d -n -o TYPE "$DISK" 2>/dev/null)" == "disk" ]] || { say "ОШИБКА: $DISK — не диск целиком"; exit 1; }
+    # Запомнить идентификатор диска: перепроверяется в run_install
+    # непосредственно перед wipefs (защита от перетыкания/переименования).
+    XROS_DISK_ID=$(xros_dev_identity "$DISK")
+  else
+    # Ручной режим: корень и EFI обязаны быть разделами, а не целыми
+    # дисками — иначе mkfs отформатировал бы весь диск.
+    [[ -n "${ROOT_PART:-}" ]] || { say "ОШИБКА: не задан корневой раздел"; exit 1; }
+    [[ -b "$ROOT_PART" ]] || { say "ОШИБКА: раздел $ROOT_PART не найден"; exit 1; }
+    [[ "$(lsblk -n -o TYPE "$ROOT_PART" 2>/dev/null)" == "part" ]] || { say "ОШИБКА: $ROOT_PART — не раздел"; exit 1; }
+    if [[ -n "${EFI_PART:-}" ]]; then
+      [[ -b "$EFI_PART" ]] || { say "ОШИБКА: раздел $EFI_PART не найден"; exit 1; }
+      [[ "$(lsblk -n -o TYPE "$EFI_PART" 2>/dev/null)" == "part" ]] || { say "ОШИБКА: $EFI_PART — не раздел"; exit 1; }
+    fi
+    XROS_ROOT_ID=$(xros_dev_identity "$ROOT_PART")
+    [[ -n "${EFI_PART:-}" ]] && XROS_EFI_ID=$(xros_dev_identity "$EFI_PART")
+  fi
+  say "Неинтерактивная установка: диск=$DISK режим=$PARTMODE фс=$FS пользователь=$USERNAME оболочка=$DE"
+else
+  # --- 1. Приветствие ---
+  dialog --colors --backtitle "$BACKTITLE" --title "$TITLE" --ok-label "Продолжить" --msgbox "\Zb\Z4$BANNER\Zn
+
+\ZbДобро пожаловать в XrOS!\Zn
+(по умолчанию — \ZbKDE Plasma\Zn)
+
+\ZbXrOS 1.0\Zn — система на базе \ZbArch Linux\Zn.
+
+Установщик:
+  1. Выберет диск и сотрёт его полностью
+  2. Разметит диск (EFI + корень)
+  3. Скопирует систему с этого диска/флешки
+  4. Установит загрузчик GRUB
+  5. Создаст пользователя" 22 70
+
+  # --- 2. Выбор диска ---
+  ISODEV=$(findmnt -n -o SOURCE /run/archiso/bootmnt 2>/dev/null || true)
+  ISODISK=$(lsblk -n -o PKNAME "$ISODEV" 2>/dev/null || true)
+  if [[ -z "$ISODISK" ]]; then
+    # Пустой ISODISK: диск с ISO не исключён из меню ниже, но перед
+    # разметкой run_install проверяет смонтированные разделы диска —
+    # ISO-носитель всегда смонтирован в bootmnt, отформатировать его
+    # нельзя и без ISODISK (см. защиту диска выше).
+    say "ВНИМАНИЕ: диск с ISO не определён (ISODISK пуст) — защита опирается на проверку смонтированных разделов"
+  fi
+  mapfile -t DISKS < <(lsblk -d -n -o NAME,SIZE,TYPE | awk -v iso="$ISODISK" '$3=="disk" && $1 !~ /^(fd|sr|loop|ram|zram)/ && $1 != iso {print "/dev/"$1" "$2}')
+  if [[ ${#DISKS[@]} -eq 0 ]]; then
+    dialog --backtitle "$BACKTITLE" --title "$TITLE" --msgbox "Диски не найдены." 8 50
+    exit 1
+  fi
+  MENU_ARGS=()
+  for line in "${DISKS[@]}"; do
+    dev=$(echo "$line" | awk '{print $1}')
+    rest=$(echo "$line" | cut -d' ' -f2-)
+    MENU_ARGS+=("$dev" "$rest")
+  done
+  DISK=$(dialog --backtitle "$BACKTITLE" --title "$TITLE" --menu "Выберите диск для установки.\nВНИМАНИЕ: все данные на нём будут стёрты!" 18 70 10 "${MENU_ARGS[@]}" 2>&1 >/dev/tty)
+  [[ -n "$DISK" ]] || exit 1
+  if [[ -n "$ISODISK" && "/dev/$ISODISK" == "$DISK" ]]; then
+    dialog --backtitle "$BACKTITLE" --title "$TITLE" --msgbox "Нельзя ставить систему на тот же диск, с которого загружена живая система ($DISK).\nВыберите другой диск." 10 65
+    exit 1
+  fi
+  dialog --backtitle "$BACKTITLE" --title "$TITLE" --yes-label "Да, стереть $DISK" --no-label "Отмена" --yesno "Точно стереть диск\n\n  $DISK\n\nи установить туда XrOS?\nВсе файлы на диске будут удалены безвозвратно." 12 60 || exit 1
+  PARTMODE="erase"
+  # Запомнить идентификатор диска: перепроверяется в run_install
+  # непосредственно перед wipefs.
+  XROS_DISK_ID=$(xros_dev_identity "$DISK")
+
+  # --- 2.5. Файловая система ---
+  FS=$(dialog --backtitle "$BACKTITLE" --title "$TITLE" --default-item ext4 --menu "Файловая система корневого раздела:" 14 70 3 \
+    ext4 "ext4 — надёжная, по умолчанию" \
+    btrfs "btrfs — снимки и сжатие" \
+    xfs "xfs — быстрая для больших файлов" 2>&1 >/dev/tty)
+  [[ -n "$FS" ]] || FS="ext4"
+
+  # --- 2.6. Часовой пояс и клавиатура ---
+  TIMEZONE=$(dialog --backtitle "$BACKTITLE" --title "$TITLE" --menu "Часовой пояс:" 18 70 8 \
+    Europe/Astrakhan "Астрахань" \
+    Europe/Moscow "Москва" \
+    Europe/Samara "Самара" \
+    Europe/Kaliningrad "Калининград" \
+    Asia/Yekaterinburg "Екатеринбург" \
+    Asia/Omsk "Омск" \
+    Asia/Novosibirsk "Новосибирск" \
+    UTC "UTC" 2>&1 >/dev/tty)
+  [[ -n "$TIMEZONE" ]] || TIMEZONE="Europe/Astrakhan"
+  KEYMAP=$(dialog --backtitle "$BACKTITLE" --title "$TITLE" --default-item ru --menu "Раскладка клавиатуры:" 12 60 2 \
+    ru "Русская" \
+    us "Английская" 2>&1 >/dev/tty)
+  [[ -n "$KEYMAP" ]] || KEYMAP="ru"
+
+  # --- 3. Пользователь ---
+  HOSTNAME=$(dialog --backtitle "$BACKTITLE" --title "$TITLE" --inputbox "Имя компьютера:" 9 50 "xros-os" 2>&1 >/dev/tty)
+  [[ -n "$HOSTNAME" ]] || HOSTNAME="xros-os"
+  # Имя компьютера — только безопасные символы: перевод строки или
+  # пробелы из диалога сломали бы /etc/hostname и /etc/hosts
+  # (в неинтерактивном режиме та же чистка есть с первого аудита).
+  HOSTNAME=$(printf '%s' "$HOSTNAME" | tr -cd 'a-zA-Z0-9.-')
+  [[ -n "$HOSTNAME" ]] || HOSTNAME="xros-os"
+  USERNAME=$(dialog --backtitle "$BACKTITLE" --title "$TITLE" --inputbox "Имя пользователя (латиница, без пробелов):" 9 50 "xros" 2>&1 >/dev/tty)
+  [[ -n "$USERNAME" ]] || USERNAME="xros"
+  USERNAME=$(echo "$USERNAME" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_')
+  [[ -n "$USERNAME" ]] || USERNAME="xros"
+  # useradd не принимает имя, начинающееся с цифры.
+  [[ "$USERNAME" =~ ^[a-z_][a-z0-9_]*$ ]] || USERNAME="u$USERNAME"
+  FULLNAME="$USERNAME"
+  while true; do
+    USERPASS=$(dialog --backtitle "$BACKTITLE" --title "$TITLE" --insecure --passwordbox "Пароль пользователя $USERNAME:" 9 50 2>&1 >/dev/tty)
+    USERPASS2=$(dialog --backtitle "$BACKTITLE" --title "$TITLE" --insecure --passwordbox "Повторите пароль:" 9 50 2>&1 >/dev/tty)
+    [[ "$USERPASS" == "$USERPASS2" && -n "$USERPASS" ]] && break
+    dialog --backtitle "$BACKTITLE" --title "$TITLE" --msgbox "Пароли не совпадают или пустые. Попробуйте ещё раз." 8 55
+  done
+  ROOTPASS=$(dialog --backtitle "$BACKTITLE" --title "$TITLE" --insecure --passwordbox "Пароль root (пусто = такой же, как у пользователя):" 9 50 2>&1 >/dev/tty)
+  [[ -n "$ROOTPASS" ]] || ROOTPASS="$USERPASS"
+  AUTOLOGIN=0
+  OFFICE="none"
+
+  # --- 3.5. Графическая оболочка ---
+  # KDE уже есть в живой системе и ставится без интернета.
+  # Другие оболочки скачиваются из интернета при установке.
+  # «Без графики» — тоже без интернета: графика живой системы удаляется.
+  DE=$(dialog --backtitle "$BACKTITLE" --title "$TITLE" --default-item kde --menu "Какую графическую оболочку установить?\nKDE уже есть на этом диске и ставится без интернета.\nДругие оболочки скачиваются из интернета.\n«Без графики» — тоже без интернета: графика живой системы удаляется." 20 70 7 \
+    kde "KDE Plasma — по умолчанию, без интернета" \
+    gnome "GNOME" \
+    xfce "XFCE — лёгкая и быстрая" \
+    cinnamon "Cinnamon" \
+    sway "Sway — Wayland, тайловый" \
+    i3 "i3-wm — тайловый, минимализм" \
+    none "Без графики — только консоль" 2>&1 >/dev/tty)
+  [[ -n "$DE" ]] || DE="kde"
+fi
+
+# --- Сопоставление оболочки (общее для обоих режимов) ---
+# ЕДИНЫЙ ИСТОЧНИК списков пакетов по вариантам DE: GUI (app.rs DES)
+# только передаёт код DE, все списки живут здесь, в движке.
+# KDE ставится НЕ через pacman: она уже есть в живой системе и
+# копируется вместе с ней (rsync), поэтому DE_PKGS для kde — это
+# канонический состав KDE-системы (документация и проверки),
+# а не список для установки. Остальные графические оболочки
+# доставляются pacman -S $DE_PKGS из интернета (см. ветку else ниже);
+# без интернета остаётся KDE из живой системы.
+# xorg-server есть только там, где он реально нужен:
+#   * KDE (Plasma 6.8, Wayland): НЕ нужен — plasma-workspace сам
+#     тянет xorg-xwayland, а xorg-server приходит зависимостью sddm
+#     (pacman -Sii: xorg-server Required By: sddm, lightdm, ...).
+#     Явный xorg-server из списка KDE убран (см. AUDIT-REPORT.md E2).
+#     Нюанс: из установленной KDE-системы xorg-server от этого не
+#     исчезнет — она копируется из живой системы, а в живой списке
+#     (profile/packages.x86_64) xorg-server пока оставлен до ретеста
+#     Wayland в QEMU (AUDIT-REPORT.md 5.4). Убрать его оттуда —
+#     отдельное решение, не часть DE=none.
+#   * XFCE/Cinnamon/i3: нужен (X11-сессии; lightdm требует xorg-server).
+#   * Sway: не нужен (Wayland; XWayland — отдельным xorg-xwayland).
+#   * GNOME: группа gnome сама тянет всё нужное; gdm включён в группу,
+#     в списке он продублирован явно — как документ менеджера входа.
+case "$DE" in
+  kde)      DE_NAME="KDE Plasma"; DE_DM="sddm";    DE_PKGS="plasma-desktop plasma-nm plasma-pa kscreen sddm konsole dolphin" ;;
+  gnome)    DE_NAME="GNOME";      DE_DM="gdm";     DE_PKGS="gnome gdm" ;;
+  xfce)     DE_NAME="XFCE";       DE_DM="lightdm"; DE_PKGS="xfce4 xfce4-goodies xorg-server lightdm lightdm-gtk-greeter" ;;
+  cinnamon) DE_NAME="Cinnamon";   DE_DM="lightdm"; DE_PKGS="cinnamon xorg-server lightdm lightdm-gtk-greeter gnome-terminal" ;;
+  sway)     DE_NAME="Sway";       DE_DM="sddm";    DE_PKGS="sway foot wofi sddm xorg-xwayland" ;;
+  i3)       DE_NAME="i3-wm";      DE_DM="lightdm"; DE_PKGS="i3-wm i3status dmenu xorg-server xorg-xinit lightdm lightdm-gtk-greeter xterm" ;;
+  none)     DE_NAME="только консоль"; DE_DM="";    DE_PKGS="" ;;
+  *)        DE="kde"; DE_NAME="KDE Plasma"; DE_DM="sddm"; DE_PKGS="plasma-desktop plasma-nm plasma-pa kscreen sddm konsole dolphin" ;;
+esac
+
+# Графический стек живой системы: верхнеуровневые пакеты из
+# profile/packages.x86_64, которые при DE=none удаляются из
+# установленной системы (точные имена, а не «удалить всё подряд»).
+# Зависимости (plasma-workspace, kwin, qt6-*, kf6-*, breeze и т.д.)
+# отдельно не перечисляются: pacman -Rns снимает их сам, а остатки
+# добирает чистка сирот (pacman -Qtdq) в ветке none ниже.
+# Почему в списке НЕТ xros-welcome / xros-install-gui: в живой системе
+# это файлы overlay (profile/airootfs), а не пакеты pacman — в базе
+# pacman их нет, и pacman -Rns их не тронет; их автостарт и сервисы
+# движок удаляет файлами (см. блок «убрать живые следы» выше и ветку none).
+# libxkbcommon-x11 — в списке: его требует qt6-base, но qt6-base сам
+# уходит в той же транзакции рекурсивным каскадом pacman -Rns
+# (проверено симуляцией на реальном pacman 7.1, см. docs/de-none-package-lists.md:
+# -Rs удаляет 433 пакета, транзакция не блокируется, сирот после неё — 0);
+# если что-то останется — доберёт чистка сирот.
+XROS_GRAPHICS_PKGS="plasma-desktop plasma-nm plasma-pa kscreen sddm konsole dolphin pipewire pipewire-pulse wireplumber xorg-server ttf-dejavu noto-fonts python-pyqt6 libxkbcommon-x11"
+
+# Базовая консольная система: эти пакеты ОБЯЗАНЫ остаться после чистки
+# графики при DE=none. Ветка none проверяет их наличие (pacman -Q);
+# если чего-то нет — установка не падает (система грузится), но в
+# журнале остаётся честное предупреждение, а DE_RESULT об этом говорит.
+#   linux — ядро (копируется с ISO, mkinitcpio пересобирает initramfs);
+#   grub — загрузчик (ставится grub-install в обе цели, BIOS и UEFI);
+#   networkmanager — сеть (сервис включается для любого DE);
+#   sudo — администрирование через группу wheel;
+#   openssh — SSH-клиент/сервер в системе есть (пакет из живой системы),
+#     но sshd НЕ включается: удалённый вход по умолчанию закрыт,
+#     как и в живой системе (см. customize_airootfs.sh: sshd disable).
+XROS_CONSOLE_BASE_PKGS="linux grub networkmanager sudo openssh"
+
+# --- 4. Разметка и установка ---
+# Движок установки. Прогресс — в формате dialog-gauge:
+# число = процент, XXX/сообщение/XXX. В интерактивном режиме
+# stdout идёт в dialog --gauge, в неинтерактивном — в GUI.
+run_install() {
+  # ВНИМАНИЕ: `set -e` здесь почти не работает — движок вызывается
+  # в контекстах, где bash игнорирует -e для всего тела функции
+  # (неинтерактивно: `run_install || RC=$?`; интерактивно:
+  # `run_install | dialog --gauge`). Проверено: в `||`-контексте
+  # упавшая команда не прерывает выполнение, а функция возвращает 0 —
+  # установщик рапортовал бы INSTALL_DONE при неудаче. Поэтому
+  # КАЖДАЯ структурная команда ниже имеет явную проверку
+  # `|| { say "ОШИБКА: ..."; exit 1; }` — на `set -e` не полагаемся.
+  # Финальный блок проверок — последний рубеж, а не единственный.
+  set -e
+  XROS_INSTALLING=1
+  echo "10"; echo "XXX"; echo "Разметка диска..."; echo "XXX"
+  if [[ "${PARTMODE:-erase}" == "manual" ]]; then
+    # Ручная разметка: разделы уже выбраны в GUI и подтверждены.
+    # Корневой раздел форматируем, EFI только монтируем (не трогаем).
+    say "Ручная разметка: корень=$ROOT_PART EFI=${EFI_PART:-нет} фс=${FS:-ext4}"
+    [[ -n "${ROOT_PART:-}" ]] || { say "ОШИБКА: не задан корневой раздел"; exit 1; }
+    [[ -b "$ROOT_PART" ]] || { say "ОШИБКА: раздел $ROOT_PART не найден"; exit 1; }
+    [[ "$(lsblk -n -o TYPE "$ROOT_PART" 2>/dev/null)" == "part" ]] || { say "ОШИБКА: $ROOT_PART — не раздел"; exit 1; }
+    if [[ -n "${EFI_PART:-}" && "$EFI_PART" == "$ROOT_PART" ]]; then
+      say "ОШИБКА: корневой и EFI-раздел совпадают ($ROOT_PART)"
+      exit 1
+    fi
+    DISK="/dev/$(lsblk -n -o PKNAME "$ROOT_PART" 2>/dev/null || true)"
+    [[ -n "$DISK" && -b "$DISK" ]] || { say "ОШИБКА: не определён диск корневого раздела $ROOT_PART"; exit 1; }
+    # Страховка от диска с ISO — и здесь, а не только при чтении конфига.
+    if [[ -n "${ISODISK:-}" && "/dev/$ISODISK" == "$DISK" ]]; then
+      say "ОШИБКА: нельзя ставить на диск с ISO ($DISK)"
+      exit 1
+    fi
+    if [[ -d /sys/firmware/efi ]]; then
+      UEFI=1
+      [[ -n "${EFI_PART:-}" && -b "$EFI_PART" ]] || { say "ОШИБКА: для UEFI нужен EFI-раздел"; exit 1; }
+      [[ "$(lsblk -n -o TYPE "$EFI_PART" 2>/dev/null)" == "part" ]] || { say "ОШИБКА: $EFI_PART — не раздел"; exit 1; }
+      # EFI-раздел обязан быть FAT: иначе mount пройдёт (ext4 тоже
+      # монтируется), а grub-install упадёт уже после форматирования
+      # корня. Проверяем до разрушения.
+      [[ "$(blkid -s TYPE -o value "$EFI_PART" 2>/dev/null)" == "vfat" ]] || { say "ОШИБКА: EFI-раздел $EFI_PART не FAT — отформатируйте его в FAT32"; exit 1; }
+    else
+      UEFI=0
+    fi
+    # BIOS + ручная разметка: GRUB i386-pc на GPT-диске требует раздел
+    # BIOS Boot (тип EF02, ~1 МБ) для core.img; без него grub-install
+    # падает. На MBR-дисках отдельный раздел не нужен.
+    if [[ $UEFI -eq 0 && -n "$DISK" && -b "$DISK" ]]; then
+      if blkid -s PTTYPE -o value "$DISK" 2>/dev/null | grep -qi '^gpt$'; then
+        if ! sgdisk -p "$DISK" 2>/dev/null | grep -qi 'EF02'; then
+          say "ОШИБКА: для BIOS-загрузки с GPT-диска нужен раздел BIOS Boot (тип EF02, ~1 МБ); создайте его вручную и повторите установку"
+          exit 1
+        fi
+      fi
+    fi
+    umount -R "$TARGET" 2>/dev/null || true
+    # Если $TARGET всё ещё смонтирован (занят процессом) — стоп до
+    # разрушения: иначе mkfs -F отформатировал бы смонтированный раздел.
+    if mountpoint -q "$TARGET" 2>/dev/null; then
+      say "ОШИБКА: не удалось размонтировать $TARGET (занят процессом?) — установка прервана"
+      exit 1
+    fi
+    # swapoff -a гасит весь swap живой системы: безопасно — живой
+    # системе swap нужен только как оперативный, установка его
+    # не использует; заодно гасится swap-раздел целевого диска.
+    swapoff -a 2>/dev/null || true
+    # Повторная проверка идентификаторов — непосредственно перед mkfs.
+    if [[ -n "${XROS_ROOT_ID:-}" ]]; then xros_verify_identity "корневой раздел" "$ROOT_PART" "$XROS_ROOT_ID"; fi
+    if [[ -n "${XROS_EFI_ID:-}" && -n "${EFI_PART:-}" ]]; then xros_verify_identity "EFI-раздел" "$EFI_PART" "$XROS_EFI_ID"; fi
+    # Разделы не должны быть смонтированы (живая система, ISO-носитель).
+    if xros_has_mounts "$ROOT_PART"; then say "ОШИБКА: корневой раздел $ROOT_PART смонтирован в живой системе — отмонтируйте его и повторите"; exit 1; fi
+    if [[ -n "${EFI_PART:-}" ]] && xros_has_mounts "$EFI_PART"; then say "ОШИБКА: EFI-раздел $EFI_PART смонтирован в живой системе — отмонтируйте его и повторите"; exit 1; fi
+    mkfs_root "$ROOT_PART" "${FS:-ext4}" || { say "ОШИБКА: не удалось отформатировать $ROOT_PART (${FS:-ext4}) — см. $LOG"; exit 1; }
+  else
+    say "Разметка $DISK (фс: ${FS:-ext4})"
+    [[ -b "${DISK:-}" ]] || { say "ОШИБКА: диск $DISK не найден"; exit 1; }
+    umount -R "$TARGET" 2>/dev/null || true
+    # Если $TARGET всё ещё смонтирован (занят процессом) — стоп до
+    # разрушения: иначе разметка пошла бы по смонтированному диску.
+    if mountpoint -q "$TARGET" 2>/dev/null; then
+      say "ОШИБКА: не удалось размонтировать $TARGET (занят процессом?) — установка прервана"
+      exit 1
+    fi
+    # swapoff -a гасит весь swap живой системы: безопасно — живой
+    # системе swap нужен только как оперативный, установка его
+    # не использует; заодно гасится swap-раздел целевого диска.
+    swapoff -a 2>/dev/null || true
+    # Повторная проверка диска — непосредственно перед wipefs:
+    # ISODISK (страховка и здесь, а не только при чтении конфига),
+    # идентификатор (перетыкание/переименование между выбором и разметкой)
+    # и смонтированные разделы (ISO-носитель и любой занятый раздел —
+    # работает и при пустом ISODISK).
+    if [[ -n "${ISODISK:-}" && "/dev/$ISODISK" == "$DISK" ]]; then
+      say "ОШИБКА: нельзя ставить на диск с ISO ($DISK)"
+      exit 1
+    fi
+    if [[ -n "${XROS_DISK_ID:-}" ]]; then xros_verify_identity "диск" "$DISK" "$XROS_DISK_ID"; fi
+    if xros_has_mounts "$DISK"; then
+      say "ОШИБКА: на диске $DISK есть смонтированные разделы — отмонтируйте их и повторите (возможно, это диск с ISO)"
+      exit 1
+    fi
+    # wipefs без проверки: его падение не фатально — таблицу разделов
+    # всё равно перепишет sgdisk ниже, а его ошибка уже жёсткая.
+    wipefs -a "$DISK" 2>/dev/null || true
+    if [[ -d /sys/firmware/efi ]]; then
+      UEFI=1
+      sgdisk --zap-all "$DISK" >>"$LOG" 2>&1 || { say "ОШИБКА: sgdisk --zap-all не удался для $DISK — см. $LOG"; exit 1; }
+      sgdisk -n 1:0:+512M -t 1:ef00 -c 1:"EFI" \
+             -n 2:0:0     -t 2:8300 -c 2:"XROS-ROOT" "$DISK" >>"$LOG" 2>&1 || { say "ОШИБКА: не удалось создать разделы на $DISK — см. $LOG"; exit 1; }
+      partprobe "$DISK" 2>/dev/null || true; sleep 1
+      if [[ -b "${DISK}p1" ]]; then EFI_PART="${DISK}p1"; ROOT_PART="${DISK}p2";
+      else EFI_PART="${DISK}1"; ROOT_PART="${DISK}2"; fi
+      mkfs.fat -F 32 -n XROS-EFI "$EFI_PART" >>"$LOG" 2>&1 || { say "ОШИБКА: не удалось отформатировать EFI-раздел $EFI_PART — см. $LOG"; exit 1; }
+    else
+      UEFI=0
+      sgdisk --zap-all "$DISK" >>"$LOG" 2>&1 || { say "ОШИБКА: sgdisk --zap-all не удался для $DISK — см. $LOG"; exit 1; }
+      sgdisk -n 1:0:+1M -t 1:ef02 -c 1:"BIOS-BOOT" \
+             -n 2:0:0  -t 2:8300 -c 2:"XROS-ROOT" "$DISK" >>"$LOG" 2>&1 || { say "ОШИБКА: не удалось создать разделы на $DISK — см. $LOG"; exit 1; }
+      partprobe "$DISK" 2>/dev/null || true; sleep 1
+      if [[ -b "${DISK}p2" ]]; then ROOT_PART="${DISK}p2"; else ROOT_PART="${DISK}2"; fi
+    fi
+    mkfs_root "$ROOT_PART" "${FS:-ext4}" || { say "ОШИБКА: не удалось отформатировать $ROOT_PART (${FS:-ext4}) — см. $LOG"; exit 1; }
+  fi
+
+  echo "30"; echo "XXX"; echo "Копирование системы XrOS..."; echo "XXX"
+  say "Монтирование $ROOT_PART -> $TARGET"
+  mkdir -p "$TARGET"
+  mount "$ROOT_PART" "$TARGET" || { say "ОШИБКА: не удалось смонтировать $ROOT_PART в $TARGET"; exit 1; }
+  if [[ $UEFI -eq 1 ]]; then mkdir -p "$TARGET/boot/efi"; mount "$EFI_PART" "$TARGET/boot/efi" || { say "ОШИБКА: не удалось смонтировать $EFI_PART в $TARGET/boot/efi"; exit 1; }; fi
+  say "Копирование живой системы (это займёт 1–3 минуты)..."
+  rsync -aAX --info=progress2 --exclude='/dev/*' --exclude='/proc/*' --exclude='/sys/*' \
+    --exclude='/tmp/*' --exclude='/run/*' --exclude='/mnt/*' --exclude='/media/*' \
+    --exclude='/lost+found' --exclude='/var/cache/pacman/pkg/*' --exclude='/var/log/journal/*' \
+    --exclude='/etc/ssh/ssh_host_*' --exclude='/etc/pacman.d/gnupg/*' \
+    / "$TARGET"/ >>"$LOG" 2>&1 || { say "ОШИБКА: копирование живой системы не удалось — см. $LOG"; exit 1; }
+
+  # ВАЖНО: в живой системе archiso ядро и initramfs НЕ лежат в /boot —
+  # сборщик выносит их на сам ISO (/xros/boot/x86_64/), а /boot в живой
+  # системе пустой. Без этого шага mkinitcpio падает, а установленная
+  # система остаётся без ядра и не грузится.
+  say "Ядро и initramfs с установочного диска -> /boot"
+  KERN_SRC=""
+  for cand in /run/archiso/bootmnt/xros/boot/x86_64 /run/archiso/bootmnt/arch/boot/x86_64 /run/archiso/bootmnt/boot/x86_64; do
+    if [[ -f "$cand/vmlinuz-linux" ]]; then KERN_SRC="$cand"; break; fi
+  done
+  if [[ -z "$KERN_SRC" ]]; then
+    say "ОШИБКА: ядро vmlinuz-linux не найдено на установочном диске"
+    exit 1
+  fi
+  mkdir -p "$TARGET/boot"
+  cp "$KERN_SRC/vmlinuz-linux" "$TARGET/boot/vmlinuz-linux" || { say "ОШИБКА: не удалось скопировать ядро в $TARGET/boot"; exit 1; }
+  cp "$KERN_SRC/initramfs-linux.img" "$TARGET/boot/initramfs-linux.img" 2>/dev/null || true
+  cp "$KERN_SRC/initramfs-linux-fallback.img" "$TARGET/boot/" 2>/dev/null || true
+  say "Ядро скопировано: $(ls -lh "$TARGET/boot/vmlinuz-linux" | awk '{print $5}')"
+
+  echo "70"; echo "XXX"; echo "Настройка установленной системы..."; echo "XXX"
+  say "fstab"
+  mkdir -p "$TARGET/etc"
+  # `>` (а не `>>`): при повторной попытке поверх прошлой fstab
+  # дописывание давало бы дубли записей.
+  genfstab -U "$TARGET" > "$TARGET/etc/fstab" || { say "ОШИБКА: не удалось создать fstab"; exit 1; }
+  # убрать живые следы archiso
+  rm -f "$TARGET/etc/mkinitcpio.conf.d/archiso.conf"
+  rm -rf "$TARGET/etc/systemd/system/getty@tty1.service.d"
+  rm -f "$TARGET/root/.zlogin" "$TARGET/root/.bash_profile" "$TARGET/root/.automated_script.sh"
+  rm -rf "$TARGET/run/archiso" "$TARGET/usr/share/archiso"
+  # убрать живые следы графической живой системы: автовход в SDDM
+  # и автостарт окна приветствия — иначе установленная система тоже
+  # будет входить в Plasma без пароля
+  rm -f "$TARGET/etc/sddm.conf.d/autologin.conf"
+  rm -f "$TARGET/etc/xdg/autostart/xros-welcome.desktop"
+  rm -rf "$TARGET/etc/systemd/user/xros-welcome.service"
+  rm -f "$TARGET/etc/systemd/user/graphical-session.target.wants/xros-welcome.service"
+  rm -f "$TARGET/root/Desktop/xros-install.desktop"
+  rm -f "$TARGET/root/customize_airootfs.sh" "$TARGET/root/wtest"
+  rm -f "$TARGET"/etc/ssh/ssh_host_*
+  # machine-id живой системы нельзя копировать: у всех установок
+  # оказался бы один и тот же ID; новый создаётся в chroot ниже.
+  # resolv.conf удаляем позже, после всех сетевых операций в chroot.
+  rm -f "$TARGET/etc/machine-id" "$TARGET/var/lib/dbus/machine-id"
+  # убрать живого пользователя xros из установленной системы
+  arch-chroot "$TARGET" userdel -r xros >>"$LOG" 2>&1 || true
+  rm -rf "$TARGET/home/xros"
+  rm -f "$TARGET/etc/sudoers.d/live-xros"
+  # hostname / locale / время — часовой пояс и раскладка из установщика
+  echo "$HOSTNAME" > "$TARGET/etc/hostname"
+  printf '127.0.0.1 localhost\n::1 localhost\n127.0.1.1 %s\n' "$HOSTNAME" > "$TARGET/etc/hosts"
+  sed -i 's/^#ru_RU.UTF-8/ru_RU.UTF-8/; s/^#en_US.UTF-8/en_US.UTF-8/' "$TARGET/etc/locale.gen"
+  printf 'LANG=ru_RU.UTF-8\n' > "$TARGET/etc/locale.conf"
+  if [[ "${KEYMAP:-ru}" == "ru" ]]; then
+    printf 'KEYMAP=ru\nFONT=cyr-sun16\n' > "$TARGET/etc/vconsole.conf"
+  else
+    printf 'KEYMAP=%s\n' "${KEYMAP:-us}" > "$TARGET/etc/vconsole.conf"
+  fi
+  # ln -sf не проверяет существование цели: неверный часовой пояс
+  # дал бы висячую ссылку. Проверяем в целевой системе (она уже
+  # скопирована) и откатываемся к Астрахани с предупреждением.
+  # Первая проверка — при чтении конфига (живая система); эта —
+  # вторая, на случай расхождения tzdata живой и целевой систем.
+  if [[ ! -f "$TARGET/usr/share/zoneinfo/${TIMEZONE:-Europe/Astrakhan}" ]]; then
+    say "ВНИМАНИЕ: часовой пояс ${TIMEZONE:-Europe/Astrakhan} не найден в целевой системе, использую Europe/Astrakhan"
+    TIMEZONE="Europe/Astrakhan"
+  fi
+  ln -sf "/usr/share/zoneinfo/${TIMEZONE:-Europe/Astrakhan}" "$TARGET/etc/localtime"
+  # GRUB с темой XrOS.
+  mkdir -p "$TARGET/usr/share/xros"
+  cat > "$TARGET/etc/default/grub" <<'GRUBEOF'
+GRUB_DEFAULT=0
+GRUB_TIMEOUT=10
+GRUB_DISTRIBUTOR="XrOS"
+GRUB_CMDLINE_LINUX_DEFAULT="loglevel=3 quiet"
+GRUB_CMDLINE_LINUX=""
+GRUB_BACKGROUND=/usr/share/xros/grub-bg.jpg
+GRUB_COLOR_NORMAL="white/black"
+GRUB_COLOR_HIGHLIGHT="white/magenta"
+GRUB_GFXMODE=1024x768,auto
+GRUB_THEME=/usr/share/xros/grub-theme/theme.txt
+GRUB_ENABLE_CRYPTODISK=n
+GRUBEOF
+  mkdir -p "$TARGET/usr/share/xros/grub-theme"
+  cp -a /usr/share/xros/grub-theme/. "$TARGET/usr/share/xros/grub-theme/" 2>/dev/null || true
+  cp /usr/share/xros/grub-bg.jpg "$TARGET/usr/share/xros/grub-bg.jpg" 2>/dev/null || true
+  # os-prober: находить другие системы (Windows, второй Linux) в меню GRUB.
+  if ! grep -q '^GRUB_DISABLE_OS_PROBER' "$TARGET/etc/default/grub"; then
+    echo 'GRUB_DISABLE_OS_PROBER=false' >> "$TARGET/etc/default/grub"
+  fi
+
+  echo "85"; echo "XXX"; echo "Установка загрузчика GRUB и паролей..."; echo "XXX"
+  say "chroot: locale, пользователи, GRUB"
+  # Пароли и ФИО могут содержать $, `, кавычки: без экранирования они
+  # раскрылись бы хостовым shell при подстановке в heredoc ниже
+  # (инъекция/поломка пароля). %q делает их безопасными shell-словами,
+  # поэтому в heredoc они стоят БЕЗ кавычек вокруг.
+  printf -v USERNAME_Q %q "$USERNAME"
+  printf -v FULLNAME_Q %q "$FULLNAME"
+  printf -v USERPASS_Q %q "$USERPASS"
+  printf -v ROOTPASS_Q %q "$ROOTPASS"
+  arch-chroot "$TARGET" bash -euo pipefail <<CHROOT_EOF >>"$LOG" 2>&1 || { say "ОШИБКА: настройка системы в chroot не удалась (locale, пользователи, mkinitcpio) — см. $LOG"; exit 1; }
+locale-gen
+systemd-machine-id-setup || true
+useradd -m -G wheel,audio,video,optical,storage -s /bin/bash -c $FULLNAME_Q $USERNAME_Q || useradd -m -G wheel -s /bin/bash -c $FULLNAME_Q $USERNAME_Q
+echo root:$ROOTPASS_Q | chpasswd
+echo $USERNAME_Q:$USERPASS_Q | chpasswd
+echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/wheel
+chmod 440 /etc/sudoers.d/wheel
+systemctl enable NetworkManager.service
+mkinitcpio -P
+CHROOT_EOF
+  if [[ $UEFI -eq 1 ]]; then
+    arch-chroot "$TARGET" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=XrOS --recheck >>"$LOG" 2>&1 \
+      || { say "ОШИБКА: grub-install (UEFI) не удался — см. $LOG"; exit 1; }
+  else
+    arch-chroot "$TARGET" grub-install --target=i386-pc --recheck "$DISK" >>"$LOG" 2>&1 \
+      || { say "ОШИБКА: grub-install (BIOS) не удался — см. $LOG"; exit 1; }
+  fi
+  arch-chroot "$TARGET" grub-mkconfig -o /boot/grub/grub.cfg >>"$LOG" 2>&1 \
+    || { say "ОШИБКА: grub-mkconfig не удался — см. $LOG"; exit 1; }
+
+  echo "88"; echo "XXX"; echo "Установка оболочки $DE_NAME..."; echo "XXX"
+  DE_RESULT="$DE_NAME"
+  DE_OK=0
+  if [[ "$DE" == "kde" ]]; then
+    # KDE уже есть в живой системе — копируется вместе с ней,
+    # интернет для этого не нужен. Включаем SDDM.
+    say "KDE Plasma уже установлена (из живой системы), включаю SDDM"
+    arch-chroot "$TARGET" systemctl enable sddm.service >>"$LOG" 2>&1 || true
+    arch-chroot "$TARGET" systemctl set-default graphical.target >>"$LOG" 2>&1 || true
+    DE_RESULT="KDE Plasma"
+    DE_OK=1
+  elif [[ "$DE" == "none" ]]; then
+    say "Без графики: удаляю графический стек живой системы (точный список, без установки всего с последующим удалением)"
+    # 1. Все менеджеры входа — выкл, цель по умолчанию — консоль.
+    #    Без set-default система грузилась бы в graphical.target
+    #    (цель живой системы) и ждала бы display-manager.service.
+    arch-chroot "$TARGET" systemctl disable sddm.service >>"$LOG" 2>&1 || true
+    arch-chroot "$TARGET" systemctl disable lightdm.service >>"$LOG" 2>&1 || true
+    arch-chroot "$TARGET" systemctl disable gdm.service >>"$LOG" 2>&1 || true
+    arch-chroot "$TARGET" systemctl set-default multi-user.target >>"$LOG" 2>&1 || true
+    # 2. Удаляем графику точным списком. pacman -Rns падает целиком,
+    #    если хоть один пакет из списка не установлен, поэтому сначала
+    #    фильтруем список до установленных (pacman -Qq).
+    TO_REMOVE=""
+    for pkg in $XROS_GRAPHICS_PKGS; do
+      if arch-chroot "$TARGET" pacman -Qq "$pkg" >>"$LOG" 2>&1; then
+        TO_REMOVE="$TO_REMOVE $pkg"
+      fi
+    done
+    if [[ -n "$TO_REMOVE" ]]; then
+      # shellcheck disable=SC2086
+      arch-chroot "$TARGET" pacman -Rns --noconfirm $TO_REMOVE >>"$LOG" 2>&1 \
+        || say "ВНИМАНИЕ: удалить графические пакеты полностью не удалось (см. $LOG)"
+    fi
+    # 3. Сироты: Qt/KF/Plasma-библиотеки (qt6-base, plasma-workspace,
+    #    kwin, breeze и т.д.) — зависимости удалённых пакетов, которые
+    #    больше никто не требует. pacman -Qtdq их перечисляет.
+    ORPHANS=$(arch-chroot "$TARGET" pacman -Qtdq 2>/dev/null || true)
+    if [[ -n "$ORPHANS" ]]; then
+      # shellcheck disable=SC2086
+      arch-chroot "$TARGET" pacman -Rns --noconfirm $ORPHANS >>"$LOG" 2>&1 \
+        || say "ВНИМАНИЕ: удалить пакеты-сироты не удалось (см. $LOG)"
+    fi
+    # 4. Графические настройки живой системы — файлами (их pacman не знает):
+    #    конфиги SDDM целиком и KDE-настройки из /etc/skel, которые
+    #    иначе достались бы новому пользователю.
+    rm -rf "$TARGET/etc/sddm.conf.d"
+    rm -f "$TARGET/etc/skel/.config/kdeglobals"
+    rm -f "$TARGET/etc/skel/.config/plasma-org.kde.plasma.desktop-appletsrc"
+    #    Окно приветствия без графики не запускается (PyQt6 удалён) —
+    #    его GUI-скрипт — мёртвый груз, убираем файл вместе с лаунчером
+    #    из меню приложений и скомпилированным байткодом (__pycache__:
+    #    иначе в консольной системе остаётся ссылка на несуществующий
+    #    /usr/local/bin/xros-welcome-gui). Консольное меню
+    #    xros-welcome (dialog, tty1) НЕ трогаем: оно работает и без графики.
+    rm -f "$TARGET/usr/local/bin/xros-welcome-gui"
+    rm -f "$TARGET/usr/share/applications/xros-welcome.desktop"
+    rm -f "$TARGET"/usr/local/bin/__pycache__/xros-welcome-gui*.pyc
+    # 5. Проверка: графики не осталось, база на месте.
+    GRAPHICS_LEFT=""
+    for pkg in $XROS_GRAPHICS_PKGS; do
+      if arch-chroot "$TARGET" pacman -Qq "$pkg" >/dev/null 2>&1; then
+        GRAPHICS_LEFT="$GRAPHICS_LEFT $pkg"
+      fi
+    done
+    BASE_MISSING=""
+    for pkg in $XROS_CONSOLE_BASE_PKGS; do
+      if ! arch-chroot "$TARGET" pacman -Qq "$pkg" >/dev/null 2>&1; then
+        BASE_MISSING="$BASE_MISSING $pkg"
+      fi
+    done
+    if [[ -n "$GRAPHICS_LEFT" ]]; then
+      say "ВНИМАНИЕ: графика удалена не полностью, осталось:$GRAPHICS_LEFT (см. $LOG)"
+    fi
+    if [[ -n "$BASE_MISSING" ]]; then
+      say "ВНИМАНИЕ: базовых пакетов нет после чистки:$BASE_MISSING (см. $LOG)"
+    fi
+    if [[ -z "$GRAPHICS_LEFT" && -z "$BASE_MISSING" ]]; then
+      DE_OK=1
+      DE_RESULT="только консоль"
+    else
+      DE_OK=0
+      DE_RESULT="только консоль (чистка графики неполная — см. журнал)"
+    fi
+  else
+    say "Графическая оболочка: $DE_NAME ($DE_PKGS), менеджер входа: $DE_DM"
+    if arch-chroot "$TARGET" pacman -Sy --noconfirm >>"$LOG" 2>&1 && arch-chroot "$TARGET" pacman -S --noconfirm --needed $DE_PKGS >>"$LOG" 2>&1; then
+      # Включаем ровно один менеджер входа: раньше для GNOME
+      # отключался только lightdm, а SDDM оставался включённым —
+      # оба висели на display-manager.service и дрались за tty1.
+      arch-chroot "$TARGET" systemctl disable sddm.service >>"$LOG" 2>&1 || true
+      arch-chroot "$TARGET" systemctl disable lightdm.service >>"$LOG" 2>&1 || true
+      arch-chroot "$TARGET" systemctl disable gdm.service >>"$LOG" 2>&1 || true
+      arch-chroot "$TARGET" systemctl enable "$DE_DM.service" >>"$LOG" 2>&1 || true
+      arch-chroot "$TARGET" systemctl set-default graphical.target >>"$LOG" 2>&1 || true
+      say "Оболочка $DE_NAME установлена, включён $DE_DM"
+      DE_OK=1
+    else
+      say "ВНИМАНИЕ: оболочку $DE_NAME установить не удалось (нет интернета или ошибка pacman) — остаётся KDE Plasma из живой системы; доустановить позже: pacman -S $DE_PKGS"
+      DE_RESULT="$DE_NAME — не установлена (нет интернета), осталась KDE Plasma"
+    fi
+  fi
+  echo "$DE_RESULT" > /tmp/xros-de-result
+
+  # Автообновления XrOS: намеренно НЕ включаем xros-update.timer.
+  # Репозиторий [xros] не подписан (SigLevel Optional TrustAll),
+  # а сервер xros.example — PLACEHOLDER без действующего адреса:
+  # автообновление с неподписанного/несуществующего источника —
+  # дыра. Юниты таймера есть в пакете xros-cli, но остаются
+  # выключенными; обновления — вручную: `pacman -Syu` /
+  # `sudo xros upgrade`. Включение таймера — отдельным шагом
+  # после публикации и GPG-подписи [xros] (см. repo/README.md).
+
+  # Офисный пакет (только из GUI; без интернета — пропускается молча).
+  # DE=none: LibreOffice и Okular — графические приложения, они тянут
+  # обратно Qt/GTK, которые ветка none только что удалила.
+  if [[ "$DE" == "none" ]]; then
+    say "Без графики: офисный пакет не ставится (консольная система)"
+  elif [[ "${OFFICE:-none}" == "libreoffice" ]]; then
+    echo "92"; echo "XXX"; echo "Установка LibreOffice..."; echo "XXX"
+    say "Офисный пакет: LibreOffice"
+    arch-chroot "$TARGET" pacman -S --noconfirm --needed libreoffice-still >>"$LOG" 2>&1 || say "ВНИМАНИЕ: LibreOffice не установлен (нет интернета)"
+  elif [[ "${OFFICE:-none}" == "viewer" ]]; then
+    echo "92"; echo "XXX"; echo "Установка просмотрщика документов..."; echo "XXX"
+    say "Офисный пакет: только просмотр (Okular)"
+    arch-chroot "$TARGET" pacman -S --noconfirm --needed okular >>"$LOG" 2>&1 || say "ВНИМАНИЕ: Okular не установлен (нет интернета)"
+  fi
+
+  # Автовход для созданного пользователя (если выбран в GUI).
+  if [[ "${AUTOLOGIN:-0}" == "1" && -n "$DE_DM" ]]; then
+    say "Автовход включён для $USERNAME ($DE_DM)"
+    if [[ "$DE_DM" == "sddm" ]]; then
+      # Сессия зависит от оболочки: plasma — только для KDE,
+      # для Sway — sway (раньше всем писался plasma).
+      case "$DE" in
+        sway) DE_SESSION="sway" ;;
+        *) DE_SESSION="plasma" ;;
+      esac
+      mkdir -p "$TARGET/etc/sddm.conf.d"
+      printf '[Autologin]\nUser=%s\nSession=%s\n' "$USERNAME" "$DE_SESSION" > "$TARGET/etc/sddm.conf.d/autologin.conf"
+    elif [[ "$DE_DM" == "gdm" ]]; then
+      # GDM не читает lightdm.conf: свой файл /etc/gdm/custom.conf
+      # (раньше для GNOME писался lightdm.conf, который никто не читал,
+      # и автовход молча не работал).
+      mkdir -p "$TARGET/etc/gdm"
+      printf '[daemon]\nAutomaticLoginEnable=True\nAutomaticLogin=%s\n' "$USERNAME" > "$TARGET/etc/gdm/custom.conf"
+    else
+      mkdir -p "$TARGET/etc/lightdm/lightdm.conf.d"
+      printf '[Seat:*]\nautologin-user=%s\nautologin-session=%s\nuser-session=%s\ngreeter-session=lightdm-gtk-greeter\n' "$USERNAME" "$DE" "$DE" > "$TARGET/etc/lightdm/lightdm.conf.d/xros-autologin.conf"
+    fi
+  fi
+
+  # resolv.conf живой системы — только после всех сетевых операций
+  # в chroot (pacman для других DE и офиса): без него в chroot нет DNS,
+  # и установка DE/офиса падала бы всегда.
+  rm -f "$TARGET/etc/resolv.conf"
+
+  echo "95"; echo "XXX"; echo "Финальная проверка..."; echo "XXX"
+  # Жёсткая проверка: без ядра, grub.cfg и загрузочного кода система не
+  # загрузится — лучше честно показать ошибку, чем «Готово!».
+  [[ -f "$TARGET/boot/vmlinuz-linux" ]] || { say "ОШИБКА: ядро не найдено в $TARGET/boot"; exit 1; }
+  [[ -f "$TARGET/boot/initramfs-linux.img" ]] || { say "ОШИБКА: initramfs не создан"; exit 1; }
+  [[ -f "$TARGET/boot/grub/grub.cfg" ]] || { say "ОШИБКА: grub.cfg не создан"; exit 1; }
+  [[ -s "$TARGET/etc/fstab" ]] || { say "ОШИБКА: fstab пуст"; exit 1; }
+  grep -q "^$USERNAME:" "$TARGET/etc/passwd" || { say "ОШИБКА: пользователь $USERNAME не создан"; exit 1; }
+  [[ "$(cat "$TARGET/etc/hostname" 2>/dev/null)" == "$HOSTNAME" ]] || { say "ОШИБКА: hostname не записан"; exit 1; }
+  if [[ -n "$DE_DM" && "$DE_OK" == "1" ]]; then
+    # DE_OK=0 — оболочка не установилась, честно осталась KDE:
+    # это не ошибка, а штатный fallback, DM не проверяем.
+    DM_LINK=$(readlink "$TARGET/etc/systemd/system/display-manager.service" 2>/dev/null || true)
+    case "$DM_LINK" in
+      *"$DE_DM"*) ;;
+      *) say "ОШИБКА: менеджер входа $DE_DM не включён (display-manager.service -> ${DM_LINK:-нет})"; exit 1 ;;
+    esac
+  fi
+  [[ -f "$TARGET/usr/share/xros/grub-theme/theme.txt" ]] || { say "ОШИБКА: тема GRUB не установлена"; exit 1; }
+  if [[ $UEFI -eq 1 ]]; then
+    [[ -f "$TARGET/boot/efi/EFI/XrOS/grubx64.efi" ]] || { say "ОШИБКА: EFI-загрузчик не установлен"; exit 1; }
+  else
+    if [[ -z "$(dd if="$DISK" bs=440 count=1 2>/dev/null | tr -d '\0')" ]]; then
+      say "ОШИБКА: загрузочный код GRUB не записан в MBR диска $DISK"
+      exit 1
+    fi
+  fi
+  say "Проверка пройдена: ядро, initramfs, GRUB и тема на месте"
+  sync
+  # Размонтирование в конце — тоже с проверкой: молчаливое `|| true`
+  # рапортовало бы успех при всё ещё смонтированном целевом диске.
+  umount -R "$TARGET" 2>/dev/null || {
+    sleep 2
+    umount -R "$TARGET" 2>/dev/null || { say "ОШИБКА: не удалось размонтировать $TARGET"; exit 1; }
+  }
+  XROS_INSTALLING=0
+  echo "100"; echo "XXX"; echo "Готово!"; echo "XXX"
+}
+
+# --- Запуск движка ---
+if [[ -n "$NONINTERACTIVE" ]]; then
+  RC=0
+  run_install || RC=$?
+  if [[ $RC -ne 0 ]]; then
+    say "Установка завершилась с ошибкой (см. $LOG)"
+    echo "INSTALL_FAILED"
+    exit 1
+  fi
+  DE_RESULT=$(cat /tmp/xros-de-result 2>/dev/null || echo "$DE_NAME")
+  say "Готово! XrOS установлена. Компьютер: $HOSTNAME, пользователь: $USERNAME, оболочка: $DE_RESULT"
+  echo "INSTALL_DONE"
+  exit 0
+fi
+
+run_install | dialog --backtitle "$BACKTITLE" --title "$TITLE" --gauge "Установка XrOS на $DISK..." 10 70 0
+RC=$?
+if [[ $RC -ne 0 ]]; then
+  # run_install работает в подшелле пайплайна: его `exit 1` не доходит
+  # до ловушки EXIT основной оболочки (XROS_INSTALLING ставится
+  # в подшелле и там не виден), поэтому чистим здесь явно —
+  # иначе $TARGET остался бы смонтирован после неудачи.
+  XROS_STOP_REASON="ошибка установки (код $RC)"
+  xros_cleanup
+  dialog --backtitle "$BACKTITLE" --title "$TITLE" --msgbox "Установка завершилась с ошибкой.
+
+Последние строки журнала:
+$(tail -n 10 "$LOG")
+
+Полный журнал: $LOG" 18 70
+  exit 1
+fi
+
+DE_RESULT=$(cat /tmp/xros-de-result 2>/dev/null || echo "$DE_NAME")
+dialog --colors --backtitle "$BACKTITLE" --title "$TITLE" --yes-label "Перезагрузить" --no-label "Остаться в живой системе" --yesno "\Zb\Z4Готово! XrOS установлена на $DISK.\Zn\n\nКомпьютер: $HOSTNAME\nПользователь: $USERNAME\nОболочка: $DE_RESULT\nЗагрузчик: GRUB с темой XrOS\n\nНе забудьте вынуть флешку/диск с ISO перед перезагрузкой." 15 65
+if [[ $? -eq 0 ]]; then reboot; fi
+exit 0

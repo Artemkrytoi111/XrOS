@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# XrOS — консольное меню живой системы (tty1).
+# Графическое окно — xros-welcome-gui; это — запасной вариант для консоли.
+set -u
+TITLE="XrOS 1.0 — живая система"
+while true; do
+  CHOICE=$(dialog --backtitle "XrOS — на базе Arch Linux" --title "$TITLE" \
+    --menu "Что сделать?" 14 60 4 \
+    1 "Запустить графический установщик" \
+    2 "Открыть терминал (оболочка)" \
+    3 "Показать информацию о системе" \
+    4 "Выключить компьютер" 2>&1 >/dev/tty)
+  case "${CHOICE:-}" in
+    1) sudo /usr/local/bin/xros-install-gui ;;
+    2) clear; echo "XrOS 1.0 — для выхода наберите exit"; bash --login ;;
+    3) clear; /usr/local/bin/xros 2>/dev/null || cat /usr/share/xros/banner.txt; echo; read -rp "Enter — назад" _ ;;
+    4) poweroff ;;
+    *) exit 0 ;;
+  esac
+done

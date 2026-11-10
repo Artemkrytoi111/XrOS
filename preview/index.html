@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>XrOS — дизайн-превью</title>
+<link rel="stylesheet" href="../branding/design-tokens.css">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--xros-bg, #08080d); color: var(--xros-text, #f5f3fa); font-family: "DejaVu Sans", sans-serif; padding: 32px; }
+  h1 { font-size: 28px; margin-bottom: 6px; }
+  .sub { color: var(--xros-text-dim, #a6a0b3); font-size: 15px; margin-bottom: 28px; max-width: 900px; line-height: 1.5; }
+  .sub b { color: var(--xros-accent-2, #b66aff); }
+  h2 { font-size: 20px; margin: 36px 0 12px; }
+  h2 span { color: var(--xros-accent, #8b00ff); }
+  .note { color: var(--xros-text-dim, #a6a0b3); font-size: 13px; margin-bottom: 12px; }
+  .frame { border: 1px solid var(--xros-border, #30283b); border-radius: 10px; overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,.6); }
+
+  /* --- палитра --- */
+  .swatches { display: flex; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+  .sw { border-radius: 8px; padding: 14px 18px; font-size: 13px; min-width: 170px; }
+  .sw b { display: block; font-size: 15px; margin-bottom: 4px; }
+
+  /* --- окно приветствия --- */
+  .welcome { width: 640px; max-width: 100%; background: var(--xros-bg-alt, #111018); padding: 24px 28px 20px; text-align: center; }
+  .welcome img.logo { width: 250px; }
+  .welcome h3 { font-size: 24px; margin: 14px 0 6px; }
+  .welcome .intro { color: var(--xros-text-dim, #a6a0b3); font-size: 14px; }
+  .welcome .about { font-size: 14px; line-height: 1.55; margin: 14px 0 18px; }
+  .btn { display: inline-block; background: var(--xros-accent, #8b00ff); color: #fff; border: none; border-radius: 6px; padding: 10px 18px; font-size: 14px; cursor: pointer; }
+  .btn.flat { background: var(--xros-bg-alt, #111018); color: var(--xros-text, #f5f3fa); border: 1px solid var(--xros-border, #30283b); }
+  .welcome .row { display: flex; gap: 10px; justify-content: center; }
+  .welcome .bottom { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; color: var(--xros-text-dim, #a6a0b3); font-size: 13px; }
+
+  /* --- установщик --- */
+  .installer { width: 960px; max-width: 100%; height: 600px; background: var(--xros-bg-alt, #111018); display: flex; flex-direction: column; }
+  .installer .main { flex: 1; display: flex; min-height: 0; }
+  .sidebar { width: 210px; background: var(--xros-bg, #08080d); padding: 10px 16px; flex-shrink: 0; }
+  .sidebar img { width: 170px; display: block; margin: 4px auto 8px; }
+  .sidebar .name { text-align: center; font-size: 16px; font-weight: bold; margin-bottom: 10px; }
+  .sidebar hr { border: none; border-top: 1px solid var(--xros-border, #30283b); margin-bottom: 12px; }
+  .sidebar .step { font-size: 15px; color: var(--xros-text-dim, #a6a0b3); padding: 4px 0; }
+  .sidebar .step.done { color: var(--xros-accent-2, #b66aff); }
+  .sidebar .step.cur { color: #fff; }
+  .content { flex: 1; display: flex; justify-content: center; padding-top: 14px; }
+  .content .col { width: 660px; max-width: 92%; text-align: center; }
+  .content img.logo { width: 250px; margin-top: 18px; }
+  .content h3 { font-size: 24px; margin: 18px 0 8px; }
+  .content p { font-size: 15px; line-height: 1.55; color: var(--xros-text, #f5f3fa); }
+  .content .lang { margin-top: 18px; font-size: 15px; }
+  .content .lang select { background: var(--xros-bg-alt, #111018); color: var(--xros-text, #f5f3fa); border: 1px solid var(--xros-border, #30283b); border-radius: 6px; padding: 6px 10px; font-size: 15px; }
+  .nav { display: flex; justify-content: flex-end; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--xros-border, #30283b); }
+  .nav .btn { min-width: 110px; text-align: center; }
+  .nav .btn:disabled { opacity: .45; }
+
+  /* --- экран завершения --- */
+  .finish { width: 960px; max-width: 100%; height: 600px; background: var(--xros-bg-alt, #111018); display: flex; flex-direction: column; }
+  .finish .main { flex: 1; display: flex; min-height: 0; }
+  .finish .content { flex: 1; display: flex; justify-content: center; align-items: center; }
+  .finish .col { width: 660px; max-width: 92%; text-align: center; }
+  .finish .check { width: 96px; height: 96px; margin: 0 auto 20px; border-radius: 50%; background: var(--xros-accent, #8b00ff); color: #fff; font-size: 56px; line-height: 96px; }
+  .finish h3 { font-size: 24px; margin-bottom: 10px; }
+  .finish p { font-size: 15px; line-height: 1.55; color: var(--xros-text-dim, #a6a0b3); }
+  .finish .reboot { margin-top: 26px; font-size: 15px; }
+  .finish .reboot input { accent-color: var(--xros-accent, #8b00ff); width: 18px; height: 18px; vertical-align: -3px; margin-right: 8px; }
+
+  /* --- GRUB --- */
+  .grub { width: 1024px; max-width: 100%; height: 560px; background: url("../branding/grub-bg.jpg") center/cover; position: relative; }
+  .grub .title { position: absolute; top: 12%; left: 0; right: 0; text-align: center; font-size: 26px; font-weight: bold; color: #fff; text-shadow: 0 2px 8px rgba(0,0,0,.7); }
+  .grub .menu { position: absolute; top: 30%; left: 25%; width: 50%; background: rgba(8,8,13,.72); border: 1px solid rgba(255,255,255,.14); border-radius: 8px; padding: 10px 0; }
+  .grub .item { padding: 8px 18px; font-size: 15px; color: var(--xros-text, #f5f3fa); }
+  .grub .item.sel { background: var(--xros-accent, #8b00ff); color: #fff; }
+  .grub .item.sel::before { content: "▸ "; color: var(--xros-accent-2, #b66aff); }
+  .grub .bar { position: absolute; top: 78%; left: 25%; width: 50%; height: 8px; background: var(--xros-bg-alt, #111018); border-radius: 4px; }
+  .grub .bar i { display: block; height: 100%; width: 70%; background: var(--xros-accent, #8b00ff); border-radius: 4px; }
+  .grub .bar span { display: block; margin-top: 8px; text-align: center; font-size: 12px; color: var(--xros-text-dim, #a6a0b3); }
+  .grub .foot { position: absolute; top: 88%; left: 0; right: 0; text-align: center; font-size: 12px; color: var(--xros-text-dim, #a6a0b3); }
+
+  /* --- обои --- */
+  .wallpaper img { display: block; width: 1024px; max-width: 100%; }
+</style>
+</head>
+<body>
+<h1>XrOS — дизайн-превью</h1>
+<p class="sub">Фирменная система, утверждённая 10.11.2026: фон <b>#08080D</b>,
+доп. фон <b>#111018</b>, акцент — фиолетовый неон <b>#8B00FF</b>,
+второй акцент <b>#B66AFF</b>. Логотип — чёрный металлический X
+с фиолетовым неоном, только символ, с настоящим прозрачным фоном.
+Экраны, которые надо одобрить или поправить <b>до сборки ISO</b>.
+Цвета берутся из <b>branding/design-tokens.css</b>.</p>
+
+<h2>Палитра</h2>
+<div class="swatches">
+  <div class="sw" style="background:#08080d; border:1px solid #30283b"><b>Фон #08080D</b>основной фон</div>
+  <div class="sw" style="background:#111018; border:1px solid #30283b"><b>Доп. фон #111018</b>панели, поля ввода</div>
+  <div class="sw" style="background:#8b00ff"><b>Акцент #8B00FF</b>кнопки, галочки, выделение</div>
+  <div class="sw" style="background:#b66aff; color:#08080d"><b>Акцент 2 #B66AFF</b>hover, ссылки, светлый неон</div>
+  <div class="sw" style="background:#f5f3fa; color:#08080d"><b>Текст #F5F3FA</b>основной текст</div>
+  <div class="sw" style="background:#a6a0b3; color:#08080d"><b>Вторичный #A6A0B3</b>подписи, второстепенный текст</div>
+  <div class="sw" style="background:#30283b"><b>Границы #30283B</b>рамки, разделители</div>
+</div>
+<p class="note">Логотип: чёрный металлический X с фиолетовой неоновой кромкой, прозрачный фон (PNG RGBA 1536×1024). Проверка на тёмной, белой и шахматной подложке — branding/logo-check-*.png.</p>
+
+<h2><span>1.</span> Окно приветствия</h2>
+<p class="note">Появляется само после входа в живую систему. Кнопка запускает установщик, галочка — показ при старте.</p>
+<div class="frame welcome">
+  <img class="logo" src="../branding/xros-logo.png" alt="XrOS">
+  <h3>Добро пожаловать в XrOS!</h3>
+  <div class="intro">Спасибо, что выбрали нашу систему!</div>
+  <div class="about">XrOS 1.0 — система на базе Arch Linux<br>с рабочим столом KDE Plasma.<br><br>Мы надеемся, что вам понравится работать с ней.</div>
+  <div class="row">
+    <button class="btn">Запустить установщик</button>
+    <button class="btn flat">О системе</button>
+  </div>
+  <div class="bottom"><span>☑ Запускать при старте</span><span>Закрыть</span></div>
+</div>
+
+<h2><span>2.</span> Установщик — шаг Welcome</h2>
+<p class="note">Свой дизайн: слева шаги с фиолетовыми галочками, по центру колонка не шире 660px, кнопки 110×36. Остальные шаги — в том же стиле.</p>
+<div class="frame installer">
+  <div class="main">
+    <div class="sidebar">
+      <img src="../branding/xros-logo-small.png" alt="XrOS">
+      <div class="name">XrOS 1.0</div>
+      <hr>
+      <div class="step cur">●&nbsp;&nbsp;Welcome</div>
+      <div class="step">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Location</div>
+      <div class="step">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Keyboard</div>
+      <div class="step">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Desktop</div>
+      <div class="step">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Partitions</div>
+      <div class="step">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Users</div>
+      <div class="step">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Office Suite</div>
+      <div class="step">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Summary</div>
+      <div class="step">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Install</div>
+      <div class="step">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Finish</div>
+    </div>
+    <div class="content">
+      <div class="col">
+        <img class="logo" src="../branding/xros-logo.png" alt="XrOS">
+        <h3>Добро пожаловать в XrOS</h3>
+        <p>XrOS 1.0 — система на базе Arch Linux<br><br>
+        Программа установки проведёт вас через несколько шагов:<br>
+        выбор места и раскладки, рабочий стол, разметка диска,<br>
+        создание пользователя и установка системы с загрузчиком GRUB.</p>
+        <div class="lang">Язык: <select><option>Русский</option><option>English</option></select></div>
+      </div>
+    </div>
+  </div>
+  <div class="nav">
+    <button class="btn flat" disabled>Назад</button>
+    <button class="btn">Далее</button>
+    <button class="btn flat">Отмена</button>
+  </div>
+</div>
+
+<h2><span>3.</span> Меню загрузки GRUB</h2>
+<p class="note">Фон — тёмные волны XrOS, центр затемнён под меню. Выбранный пункт подсвечен акцентом #8B00FF, внизу — полоса таймера автозагрузки (10 с).</p>
+<div class="frame grub">
+  <div class="title">XrOS 1.0</div>
+  <div class="menu">
+    <div class="item sel">XrOS 1.0 (x86_64, UEFI)</div>
+    <div class="item">XrOS 1.0 — с экранным диктором</div>
+    <div class="item">Настройки UEFI</div>
+    <div class="item">Выключить компьютер</div>
+    <div class="item">Перезагрузить компьютер</div>
+  </div>
+  <div class="bar"><i></i><span>Автозагрузка через 10 с</span></div>
+  <div class="foot">XrOS — на базе Arch Linux</div>
+</div>
+
+<h2><span>4.</span> Экран завершения — шаг Finish</h2>
+<p class="note">Тот же стиль: фиолетовый кружок с белой галочкой, чекбокс «Перезагрузить компьютер сейчас» включён по умолчанию, кнопка «Завершить». Живой вид будет на скриншоте QEMU на этапе тестирования.</p>
+<div class="frame finish">
+  <div class="main">
+    <div class="sidebar">
+      <img src="../branding/xros-logo-small.png" alt="XrOS">
+      <div class="name">XrOS 1.0</div>
+      <hr>
+      <div class="step done">✓&nbsp;&nbsp;Welcome</div>
+      <div class="step done">✓&nbsp;&nbsp;Location</div>
+      <div class="step done">✓&nbsp;&nbsp;Keyboard</div>
+      <div class="step done">✓&nbsp;&nbsp;Desktop</div>
+      <div class="step done">✓&nbsp;&nbsp;Partitions</div>
+      <div class="step done">✓&nbsp;&nbsp;Users</div>
+      <div class="step done">✓&nbsp;&nbsp;Office Suite</div>
+      <div class="step done">✓&nbsp;&nbsp;Summary</div>
+      <div class="step done">✓&nbsp;&nbsp;Install</div>
+      <div class="step cur">●&nbsp;&nbsp;Finish</div>
+    </div>
+    <div class="content">
+      <div class="col">
+        <div class="check">✓</div>
+        <h3>XrOS успешно установлена</h3>
+        <p>Установка завершена. Теперь можно перезагрузить компьютер<br>
+        и войти в установленную систему.</p>
+        <label class="reboot"><input type="checkbox" checked> Перезагрузить компьютер сейчас</label>
+      </div>
+    </div>
+  </div>
+  <div class="nav">
+    <button class="btn flat" disabled>Назад</button>
+    <button class="btn">Завершить</button>
+    <button class="btn flat">Отмена</button>
+  </div>
+</div>
+
+<h2><span>5.</span> Обои рабочего стола</h2>
+<p class="note">Чёрные, фиолетовые волны-ленты, по центру X, без надписи «XrOS» (надпись убрана инпейнтингом при генерации, исходник wallpaper-real.png не тронут). 1920×1080, апскейл из исходника 1672×941 без кропа.</p>
+<div class="frame wallpaper">
+  <img src="../branding/wallpaper.jpg" alt="Обои XrOS">
+</div>
+</body>
+</html>

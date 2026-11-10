@@ -1,0 +1,19 @@
+# XrOS — окно приветствия: ЕДИНСТВЕННЫЙ механизм автозапуска.
+# Plasma (Wayland и X11) запускает этот файл из /etc/xdg/autostart
+# после готовности графической сессии. Окружение (WAYLAND_DISPLAY,
+# XDG_RUNTIME_DIR) наследуется от сессии — задавать вручную не нужно.
+# Отключение — переключателем в самом окне: он пишет
+# ~/.config/autostart/xros-welcome.desktop с Hidden=true
+# (XDG: пользовательский файл с тем же именем перекрывает системный).
+# systemd user service и ~/.xprofile УДАЛЕНЫ
+# (см. docs/final-refinement/welcome-wayland.md): service требовал
+# X11-переменные DISPLAY=:0/XAUTHORITY и дублировал запуск,
+# а .xprofile под Wayland вообще не выполняется.
+[Desktop Entry]
+Type=Application
+Name=Добро пожаловать в XrOS
+Comment=Окно приветствия XrOS
+Exec=/usr/local/bin/xros-welcome-gui
+Icon=/usr/share/xros/xros-logo.png
+OnlyShowIn=KDE;
+X-GNOME-Autostart-enabled=true

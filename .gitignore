@@ -1,0 +1,12 @@
+# build-env: собственный изолированный build environment XrOS
+build-env/         # Arch-rootfs, кэш пакетов, bootstrap-тарболл, логи (вне git)
+
+# Сборка и артефакты (не коммитим — пересобираются из исходников)
+out/               # готовые ISO и логи сборки
+work/              # рабочие каталоги mkarchiso
+experiments/       # QEMU-прогоны: логи, скриншоты, образы дисков
+*.iso
+*.img
+*.log
+__pycache__/
+*.pyc

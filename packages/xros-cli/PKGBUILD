@@ -1,0 +1,48 @@
+# XrOS — пакет xros-cli: команда `xros` (Rust).
+# Бинарь собран заранее из src/xros-cli (cargo build --release
+# --offline в chroot сборки: кэш cargo с libc 0.2 лежит там
+# в /home/hatch/.cargo). Это *-bin-подход: исходники — в проекте,
+# в src/xros-cli, а в пакете — собранный из них бинарь.
+# (В другом проекте CLI собирался из исходников прямо в PKGBUILD;
+#  здесь оставлен *-bin, потому что на хосте сборки нет cargo-кэша
+#  и пересборка при каждой сборке пакета не нужна — команда крошечная
+#  и меняется редко. Если появится cargo-кэш на хосте — перевести
+#  на build() из исходников.)
+# Файл-источник лежит РЯДОМ с PKGBUILD:
+# его кладёт туда этап сборки (scripts/build.sh) из актуального
+# исходника; prepare() ниже проверяет, что бинарь свежий.
+# Автообновления: юниты xros-update.* ШЬЮТСЯ в пакет, но по
+# умолчанию ВЫКЛЮЧЕНЫ (таймер нигде не включается — ни в живой
+# системе, ни установщиком). Включать их нельзя, пока нет
+# подписанного репозитория [xros]; модель обновлений — см. README
+# репозитория и ARCHITECTURE.md.
+# PLACEHOLDER: https://xros.example — домена не существует,
+# настоящий домен/сайт XrOS ещё не выбран (см. ARCHITECTURE.md).
+
+pkgname=xros-cli
+pkgver=1.0
+pkgrel=1
+pkgdesc="Команда xros: информация о системе и обновление"
+arch=('x86_64')
+url="https://xros.example"
+license=('custom:XrOS')
+depends=('glibc' 'xros-branding')
+options=('!debug')
+source=('xros'
+        'xros-update.service'
+        'xros-update.timer')
+sha256sums=('SKIP' 'SKIP' 'SKIP')
+
+prepare() {
+  # Бинарь: ни один исходник не должен быть новее бинаря.
+  if [[ -n $(find "$startdir/../../src/xros-cli" -type f -newer "$srcdir/xros" -print -quit) ]]; then
+    error "бинарь xros старше исходников src/xros-cli: пересоберите (cargo build --release --offline)"
+    exit 1
+  fi
+}
+
+package() {
+  install -Dm755 xros "$pkgdir/usr/local/bin/xros"
+  install -Dm644 xros-update.service "$pkgdir/usr/lib/systemd/system/xros-update.service"
+  install -Dm644 xros-update.timer "$pkgdir/usr/lib/systemd/system/xros-update.timer"
+}

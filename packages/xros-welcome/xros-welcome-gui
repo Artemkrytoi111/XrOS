@@ -1,0 +1,248 @@
+#!/usr/bin/env python3
+# XrOS — современное окно приветствия.
+# PyQt6, тёмная тема, фирменная система XrOS 10.11.2026:
+# фон #08080D, акцент #8B00FF, второй акцент #B66AFF.
+# Запускается из /etc/xdg/autostart/xros-welcome.desktop — это
+# ЕДИНСТВЕННЫЙ механизм автозапуска (Plasma запускает его после
+# готовности графической сессии; работает и в Wayland, и в X11;
+# окружение WAYLAND_DISPLAY/XDG_RUNTIME_DIR наследуется от сессии).
+# systemd user service и ~/.xprofile удалены: service требовал
+# X11-переменные DISPLAY=:0/XAUTHORITY, а .xprofile под Wayland
+# не выполняется; оба дублировали запуск.
+# Ручной запуск из меню: xros-welcome-gui --manual (обходит проверку
+# Hidden=true). Один экземпляр — через flock. Переключатель
+# «Запускать при старте» управляет файлом
+# ~/.config/autostart/xros-welcome.desktop: Hidden=true отключает
+# автозапуск (XDG: пользовательский файл перекрывает системный).
+import fcntl
+import os
+import subprocess
+import sys
+
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QPixmap
+from PyQt6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+LOGO = "/usr/share/xros/xros-logo.png"
+AUTOSTART = os.path.expanduser("~/.config/autostart/xros-welcome.desktop")
+INSTALLER = "/usr/local/bin/xros-install-gui"
+
+ACCENT = "#8b00ff"
+ACCENT_LIGHT = "#b66aff"
+BG = "#08080d"
+PANEL = "#111018"
+TEXT = "#f5f3fa"
+DIM = "#a6a0b3"
+
+TEXTS = {
+    "ru": {
+        "title": "Добро пожаловать в XrOS!",
+        "intro": "Спасибо, что выбрали нашу систему!",
+        "about_text": (
+            "XrOS 1.0 — система на базе Arch Linux\n"
+            "с рабочим столом KDE Plasma.\n\n"
+            "Мы надеемся, что вам понравится работать с ней."
+        ),
+        "docs": "Документация",
+        "about": "О системе",
+        "install": "Установка",
+        "launch_installer": "Запустить установщик",
+        "launch_at_start": "Запускать при старте",
+        "close": "Закрыть",
+    },
+    "en": {
+        "title": "Welcome to XrOS!",
+        "intro": "Thank you for choosing our system!",
+        "about_text": (
+            "XrOS 1.0 — a system based on Arch Linux\n"
+            "with the KDE Plasma desktop.\n\n"
+            "We hope you enjoy working with it."
+        ),
+        "docs": "Documentation",
+        "about": "About",
+        "install": "Install",
+        "launch_installer": "Launch installer",
+        "launch_at_start": "Launch at start",
+        "close": "Close",
+    },
+}
+
+
+class WelcomeWindow(QMainWindow):
+    def __init__(self, lang="ru"):
+        super().__init__()
+        self.t = TEXTS.get(lang, TEXTS["ru"])
+        self.setWindowTitle("XrOS — " + self.t["title"])
+        self.setFixedSize(640, 460)
+        self.setStyleSheet(
+            f"QMainWindow {{ background: {BG}; }}"
+            f"QLabel {{ color: {TEXT}; }}"
+            f"QPushButton {{ background: {ACCENT}; color: white; border: none;"
+            f" border-radius: 6px; padding: 10px 18px; font-size: 14px; }}"
+            f"QPushButton:hover {{ background: {ACCENT_LIGHT}; }}"
+            f"QPushButton:flat {{ background: {PANEL}; color: {TEXT}; }}"
+            f"QCheckBox {{ color: {DIM}; font-size: 13px; }}"
+        )
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(28, 24, 28, 20)
+        layout.setSpacing(12)
+
+        # логотип
+        if os.path.exists(LOGO):
+            logo = QLabel()
+            pix = QPixmap(LOGO).scaledToWidth(250, Qt.TransformationMode.SmoothTransformation)
+            logo.setPixmap(pix)
+            logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(logo)
+
+        title = QLabel(self.t["title"])
+        title.setStyleSheet("font-size: 24px; font-weight: bold;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        intro = QLabel(self.t["intro"])
+        intro.setStyleSheet(f"font-size: 14px; color: {DIM};")
+        intro.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(intro)
+
+        about = QLabel(self.t["about_text"])
+        about.setStyleSheet(f"font-size: 14px; color: {TEXT};")
+        about.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(about)
+
+        layout.addStretch()
+
+        # кнопки действий
+        row = QHBoxLayout()
+        btn_install = QPushButton(self.t["launch_installer"])
+        btn_install.clicked.connect(self.launch_installer)
+        row.addWidget(btn_install)
+        btn_about = QPushButton(self.t["about"])
+        btn_about.setFlat(True)
+        btn_about.clicked.connect(self.show_about)
+        row.addWidget(btn_about)
+        layout.addLayout(row)
+
+        # низ: галочка запуска при старте + закрыть
+        bottom = QHBoxLayout()
+        self.start_check = QCheckBox(self.t["launch_at_start"])
+        # Галочка отражает реальное состояние: автозапуск включён,
+        # пока пользовательский файл не содержит Hidden=true.
+        # По умолчанию пользовательского файла нет, а системный
+        # /etc/xdg/autostart активен — значит, галочка включена.
+        # (Раньше было setChecked(exists): при отсутствии файла
+        # галочка ложно показывалась выключенной.)
+        try:
+            with open(AUTOSTART) as _f:
+                _autostart_on = "Hidden=true" not in _f.read()
+        except FileNotFoundError:
+            _autostart_on = True
+        # setChecked без блокировки сигналов вызвал бы stateChanged
+        # и записал бы файл при каждом запуске окна.
+        self.start_check.blockSignals(True)
+        self.start_check.setChecked(_autostart_on)
+        self.start_check.blockSignals(False)
+        self.start_check.stateChanged.connect(self.toggle_autostart)
+        bottom.addWidget(self.start_check)
+        bottom.addStretch()
+        btn_close = QPushButton(self.t["close"])
+        btn_close.setFlat(True)
+        btn_close.clicked.connect(self.close)
+        bottom.addWidget(btn_close)
+        layout.addLayout(bottom)
+
+    def launch_installer(self):
+        try:
+            subprocess.Popen([INSTALLER])
+        except OSError:
+            # Бинарь установщика отсутствует (например, в системе
+            # без графики): показать предупреждение, а не падать
+            # с FileNotFoundError и SIGABRT из слота Qt.
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                self.t["install"],
+                "Не удалось запустить установщик:\n" + INSTALLER,
+            )
+            return
+        self.close()
+
+    def show_about(self):
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.information(
+            self,
+            self.t["about"],
+            "XrOS 1.0\n\n"
+            "Arch Linux, KDE Plasma, GRUB.\n"
+            "Живой пользователь: xros, компьютер: xros-os.",
+        )
+
+    def toggle_autostart(self, state):
+        # галочка управляет файлом автозапуска напрямую
+        if state:
+            os.makedirs(os.path.dirname(AUTOSTART), exist_ok=True)
+            with open(AUTOSTART, "w") as f:
+                f.write(
+                    "[Desktop Entry]\n"
+                    "Type=Application\n"
+                    "Name=Добро пожаловать в XrOS\n"
+                    "Exec=/usr/local/bin/xros-welcome-gui\n"
+                    "Icon=/usr/share/xros/xros-logo.png\n"
+                )
+        else:
+            # Просто удалить файл нельзя: системный /etc/xdg/autostart
+            # всё равно запустил бы окно. Hidden=true отключает
+            # и системный, и пользовательский автозапуск (правило XDG),
+            # а main() проверяет этот флаг при любом способе запуска.
+            os.makedirs(os.path.dirname(AUTOSTART), exist_ok=True)
+            with open(AUTOSTART, "w") as f:
+                f.write(
+                    "[Desktop Entry]\n"
+                    "Type=Application\n"
+                    "Name=Добро пожаловать в XrOS\n"
+                    "Exec=/usr/local/bin/xros-welcome-gui\n"
+                    "Icon=/usr/share/xros/xros-logo.png\n"
+                    "Hidden=true\n"
+                )
+
+
+def main():
+    # один экземпляр: второй запуск просто выходит
+    lock_path = os.path.expanduser("~/.cache/xros-welcome.lock")
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    lock = open(lock_path, "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return 0
+    lang = "en" if os.environ.get("LANG", "").startswith("en") else "ru"
+    # «Запускать при старте» выключен — не показываемся при автозапуске.
+    # Ручной запуск из меню (--manual) эту проверку обходит: отключение
+    # автозапуска не должно блокировать окно, открытое пользователем.
+    if "--manual" not in sys.argv:
+        try:
+            with open(AUTOSTART) as f:
+                if "Hidden=true" in f.read():
+                    return 0
+        except FileNotFoundError:
+            pass
+    app = QApplication(sys.argv)
+    win = WelcomeWindow(lang)
+    win.show()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

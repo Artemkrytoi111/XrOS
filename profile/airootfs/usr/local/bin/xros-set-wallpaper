@@ -1,0 +1,27 @@
+#!/bin/sh
+# XrOS: установить обои по умолчанию (один раз, только в живой системе).
+# Запускается из автозапуска живого пользователя (xros-wallpaper.desktop)
+# после входа в Plasma.
+#
+# Почему не поставлять готовый appletsrc: Plasma 6.8 при загрузке
+# чужого plasma-org.kde.plasma.desktop-appletsrc МИГРИРУЕТ его —
+# создаёт новый activityId и перенумеровывает папки [1]/[2] в [21]/[22],
+# которые сталкиваются с ID дочерних виджетов трея (battery=21,
+# brightness=22). plasmashell после этого крутит 65–100% CPU,
+# KWin пишет «main thread was hanging», рабочий стол не рисуется
+# (доказано в QEMU на fixed2 и fixed3, 10.11.2026). Без appletsrc
+# Plasma генерирует раскладку сама — и рабочий стол работает.
+# Обои ставятся этим скриптом через plasma-apply-wallpaperimage.
+WALLPAPER=/usr/share/xros/wallpaper.png
+AUTOSTART="$HOME/.config/autostart/xros-wallpaper.desktop"
+[ -f "$WALLPAPER" ] || exit 0
+i=0
+while [ "$i" -lt 30 ]; do
+    if plasma-apply-wallpaperimage "$WALLPAPER" >/dev/null 2>&1; then
+        rm -f "$AUTOSTART"
+        exit 0
+    fi
+    i=$((i + 1))
+    sleep 3
+done
+exit 1

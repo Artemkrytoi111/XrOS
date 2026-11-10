@@ -1,0 +1,43 @@
+# XrOS — пакет xros-welcome: окно приветствия (PyQt6) + автостарт.
+# Файлы-источники лежат РЯДОМ с PKGBUILD:
+# их кладёт туда этап сборки (scripts/build.sh) из актуальных
+# исходников; prepare() ниже проверяет, что копии свежие.
+# PLACEHOLDER: https://xros.example — домена не существует,
+# настоящий домен/сайт XrOS ещё не выбран (см. ARCHITECTURE.md).
+
+pkgname=xros-welcome
+pkgver=1.0
+pkgrel=2
+pkgdesc="Окно приветствия XrOS"
+arch=('any')
+url="https://xros.example"
+license=('custom:XrOS')
+depends=('python-pyqt6' 'xros-branding')
+options=('!debug')
+source=('xros-welcome-gui'
+        'xros-welcome.desktop'
+        'xros-welcome-menu.desktop')
+sha256sums=('SKIP' 'SKIP' 'SKIP')
+
+prepare() {
+  # Окно приветствия: staged-копия обязана совпадать с src/.
+  if ! cmp -s "$startdir/../../src/xros-welcome-gui" "$srcdir/xros-welcome-gui"; then
+    error "xros-welcome-gui отличается от src/xros-welcome-gui: обновите staged-копию (см. scripts/build.sh, этап 2)"
+    exit 1
+  fi
+  # .desktop-файлы: staged-копии обязаны совпадать с профилем airootfs.
+  if ! cmp -s "$startdir/../../profile/airootfs/etc/xdg/autostart/xros-welcome.desktop" "$srcdir/xros-welcome.desktop"; then
+    error "xros-welcome.desktop отличается от профиля airootfs: обновите staged-копию"
+    exit 1
+  fi
+  if ! cmp -s "$startdir/../../profile/airootfs/usr/share/applications/xros-welcome.desktop" "$srcdir/xros-welcome-menu.desktop"; then
+    error "xros-welcome-menu.desktop отличается от профиля airootfs: обновите staged-копию"
+    exit 1
+  fi
+}
+
+package() {
+  install -Dm755 xros-welcome-gui "$pkgdir/usr/local/bin/xros-welcome-gui"
+  install -Dm644 xros-welcome.desktop "$pkgdir/etc/xdg/autostart/xros-welcome.desktop"
+  install -Dm644 xros-welcome-menu.desktop "$pkgdir/usr/share/applications/xros-welcome.desktop"
+}

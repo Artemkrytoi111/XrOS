@@ -1,0 +1,46 @@
+# XrOS — пакет xros-installer: консольный и графический установщики.
+# Графический бинарь собран заранее из src/xros-install-gui-rs
+# (cargo build --release --offline в chroot сборки: кэш cargo с eframe
+#  0.32 лежит там в /home/hatch/.cargo) — пересобирать egui при каждой
+# сборке пакета долго, поэтому сюда кладём готовый бинарь, как делают
+# *-bin пакеты. Это *-bin-подход: исходники — в проекте, в
+# src/xros-install-gui-rs, а в пакете — собранный из них бинарь.
+# Файлы-источники лежат РЯДОМ с PKGBUILD:
+# их кладёт туда этап сборки (scripts/build.sh) из актуальных
+# исходников; prepare() ниже проверяет, что копии свежие, и роняет
+# сборку, если исходник новее staged-файла.
+# PLACEHOLDER: https://xros.example — домена не существует,
+# настоящий домен/сайт XrOS ещё не выбран (см. ARCHITECTURE.md).
+
+pkgname=xros-installer
+pkgver=1.0
+pkgrel=2
+pkgdesc="Установщик XrOS: консольный и графический"
+arch=('x86_64')
+url="https://xros.example"
+license=('custom:XrOS')
+depends=('bash' 'dialog' 'rsync' 'parted' 'dosfstools' 'e2fsprogs' 'btrfs-progs'
+         'xfsprogs' 'gptfdisk' 'grub' 'efibootmgr' 'os-prober' 'libxkbcommon-x11'
+         'xros-branding')
+options=('!debug')
+source=('xros-install'
+        'xros-install-gui')
+sha256sums=('SKIP' 'SKIP')
+
+prepare() {
+  # Консольный установщик: staged-копия обязана совпадать с src/.
+  if ! cmp -s "$startdir/../../src/xros-install" "$srcdir/xros-install"; then
+    error "xros-install отличается от src/xros-install: обновите staged-копию (см. scripts/build.sh, этап 2)"
+    exit 1
+  fi
+  # Графический бинарь: ни один исходник не должен быть новее бинаря.
+  if [[ -n $(find "$startdir/../../src/xros-install-gui-rs" -type f -newer "$srcdir/xros-install-gui" -print -quit) ]]; then
+    error "xros-install-gui старше исходников src/xros-install-gui-rs: пересоберите бинарь (cargo build --release --offline)"
+    exit 1
+  fi
+}
+
+package() {
+  install -Dm755 xros-install "$pkgdir/usr/local/bin/xros-install"
+  install -Dm755 xros-install-gui "$pkgdir/usr/local/bin/xros-install-gui"
+}
