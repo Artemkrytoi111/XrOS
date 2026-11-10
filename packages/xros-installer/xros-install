@@ -24,11 +24,7 @@ TITLE="XrOS 1.0 — Установщик"
 BACKTITLE="XrOS  •  на базе Arch Linux"
 TARGET="/mnt/xros-install"
 LOG="/tmp/xros-install.log"
-# Симлинк в /tmp вместо журнала — классическая атака: `: >` пошёл бы
-# по ссылке от root и зачистил бы чужой файл. Убираем ссылку заранее.
-[[ -L "$LOG" ]] && rm -f "$LOG"
-: > "$LOG"
-chmod 600 "$LOG"
+# Журнал создаётся ПОСЛЕ перевыполнения через sudo (ниже) — см. fixed6.
 # Остаток прошлого запуска (de-result мог остаться после обрыва) —
 # зачищаем в начале, а не только в cleanup.
 rm -f /tmp/xros-de-result
@@ -53,6 +49,17 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
   fi
 fi
+# fixed6 (11.11.2026): журнал создаётся ТОЛЬКО ЗДЕСЬ — после перевыполнения
+# через sudo, когда мы гарантированно root. Раньше он создавался выше от
+# xros (umask 077, mode 600), и на повторном запуске root-процесс не мог
+# открыть его на дозапись (Permission denied даже для root) — из-за этого
+# `sgdisk >>"$LOG"` падал, и движок рапортовал «sgdisk не удался», хотя сам
+# sgdisk работал. Симлинк вместо журнала — классическая атака: `: >` пошёл
+# бы по ссылке от root и зачистил бы чужой файл. Чужой журнал удаляем.
+[[ -L "$LOG" ]] && rm -f "$LOG"
+if [[ -e "$LOG" && ! -O "$LOG" ]]; then rm -f "$LOG"; fi
+: > "$LOG"
+chmod 600 "$LOG"
 if [[ ! -d /run/archiso/bootmnt && ! -f /run/archiso/airootfs/etc/os-release ]]; then
   if [[ -z "$NONINTERACTIVE" ]]; then
     dialog --backtitle "$BACKTITLE" --title "$TITLE" --msgbox "Внимание: это не похоже на живую систему XrOS.\nУстановка будет копировать текущую систему (/)." 10 60
@@ -857,6 +864,13 @@ CHROOT_EOF
   if [[ $UEFI -eq 1 ]]; then
     arch-chroot "$TARGET" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=XrOS --recheck >>"$LOG" 2>&1 \
       || { say "ОШИБКА: grub-install (UEFI) не удался — см. $LOG"; exit 1; }
+    # fixed6 (11.11.2026): fallback для UEFI. Без него при свежем NVRAM
+    # (без записи Boot0002) прошивка не находит загрузчик и уходит в PXE
+    # (проверено: на EFI-разделе был только \EFI\XROS\GRUBX64.EFI).
+    # Копируем загрузчик в стандартный путь \EFI\BOOT\BOOTX64.EFI.
+    mkdir -p "$TARGET/boot/efi/EFI/BOOT"
+    cp -a "$TARGET/boot/efi/EFI/XROS/grubx64.efi" "$TARGET/boot/efi/EFI/BOOT/BOOTX64.EFI" \
+      || { say "ОШИБКА: не удалось создать fallback BOOTX64.EFI — см. $LOG"; exit 1; }
   else
     arch-chroot "$TARGET" grub-install --target=i386-pc --recheck "$DISK" >>"$LOG" 2>&1 \
       || { say "ОШИБКА: grub-install (BIOS) не удался — см. $LOG"; exit 1; }

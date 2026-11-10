@@ -41,7 +41,7 @@ terminal-box: "terminal_box_*.png"
   color = "#a6a0b3"
 }
 
-+ label {
++ progress_bar {
   id = "__timeout__"
   left = 25%
   top = 84%
@@ -49,12 +49,15 @@ terminal-box: "terminal_box_*.png"
   height = 20
   text = "Автозагрузка через @TIMEOUT@ с"
   font = "DejaVu Sans 12"
-  color = "#a6a0b3"
+  text_color = "#f5f3fa"
+  fg_color = "#8b00ff"
+  bg_color = "#30283b"
+  border_color = "#30283b"
   align = "center"
 }
 
-# 10.11.2026 (fixed5): progress_bar УДАЛЁН — в fixed4 он тоже имел
-# id "__timeout__", и GRUB обновлял только ПЕРВЫЙ компонент с этим id
-# (сам progress_bar, который заполнялся), а label с @TIMEOUT@ так и
-# показывал литерал. Один id — один компонент: остался только label,
-# его текст GRUB подставляет (число обратного отсчёта).
+# 11.11.2026 (fixed6): @TIMEOUT@ подставляется GRUB ТОЛЬКО в progress_bar
+# с id "__timeout__" (в label — никогда; доказано установленной системой:
+# fixed5-label показывал литерал "@TIMEOUT@"). Поэтому обратный отсчёт —
+# это progress_bar: число в тексте + заполнение фиолетовым. Label с
+# @TIMEOUT@ удалён; единственный компонент с id "__timeout__" — этот bar.

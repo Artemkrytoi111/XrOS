@@ -76,8 +76,12 @@ QEMU 8.2.2, OVMF, std VGA, TCG (без KVM). Виртуальный диск 20 
   `apt-get install qemu-system-x86 qemu-system-gui qemu-utils qemu-block-extra
   ovmf seabios ipxe-qemu xorriso squashfs-tools` → QEMU 8.2.2.
 - 2026-11-11 ~01:00 — ВМ перезапущена (run fixed5-uefi-grub2, pid 5387,
-  тот же диск fixed-uefi.qcow2). Повторная установка с нуля (erase) —
-  в процессе.
+  тот же диск fixed-uefi.qcow2). Повторная установка с нуля (erase).
+- 2026-11-11 ~01:35 — повторная установка ЗАПУЩЕНА (обход §2.1: rm лога +
+  запуск от root через `export` + `sudo -E`). Конфиг прочитан:
+  диск=/dev/sda, erase, ext4, mia, kde. sgdisk прошёл, GPT стёрт,
+  разметка /dev/sda идёт. Печать в QEMU крайне ненадёжна (двоение букв
+  даже при задержке 0.8 с); надёжный приём — короткие команды по 1–2 строки.
 
 ## 3. Аномалии Live-среды (зафиксированы, не блокируют установку)
 

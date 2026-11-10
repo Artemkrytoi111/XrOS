@@ -178,34 +178,31 @@ if grep -qiE "menuentry.*UEFI Shell" profile/grub/grub.cfg; then
 else
   ok "grub.cfg: пункта UEFI Shell нет (намеренно отсутствует)"
 fi
-# 7з. Меню GRUB (дефект 10.11.2026, fixed3): @TIMEOUT@ в тексте
-# progress_bar GRUB НЕ подставляет (на экране был литерал) —
-# таймаут должен быть отдельным label с id "__timeout__";
-# пункт меню не длиннее ~30 символов, иначе pixmap выделения
-# (50% ширины) обрезает текст («с экранным диктором (speaking)»
-# обрезался до «(s», fixed3).
+# 7з. Меню GRUB (дефект 10.11.2026, fixed3/fixed6): @TIMEOUT@ GRUB
+# подставляет ТОЛЬКО в progress_bar с id "__timeout__" (в label — никогда;
+# доказано установленной системой: fixed5-label показывал литерал).
+# Поэтому: @TIMEOUT@ — только в progress_bar, ни в одном label его нет;
+# id "__timeout__" ровно один; пункт меню не длиннее ~30 символов, иначе
+# pixmap выделения (50% ширины) обрезает текст («с экранным диктором
+# (speaking)» обрезался до «(s», fixed3).
 if awk '/\+ progress_bar \{/{f=1} f&&/^\}/{f=0} f&&/@TIMEOUT@/{bad=1} END{exit bad?0:1}' profile/grub/theme/theme.txt; then
-  bad "theme.txt: @TIMEOUT@ в progress_bar (GRUB не подставляет, будет литерал)"
+  ok "theme.txt: @TIMEOUT@ в progress_bar (GRUB подставит число)"
 else
-  ok "theme.txt: в progress_bar нет @TIMEOUT@"
+  bad "theme.txt: нет @TIMEOUT@ в progress_bar (обратный отсчёт не покажется)"
 fi
-if grep -B 2 -A 10 '+ label' profile/grub/theme/theme.txt | grep -q 'id = "__timeout__"' && grep -A 10 '+ label' profile/grub/theme/theme.txt | grep -q '@TIMEOUT@'; then
-  ok "theme.txt: таймаут — label с id __timeout__ и @TIMEOUT@"
+if awk '/\+ label \{/{f=1} f&&/^\}/{f=0} f&&/@TIMEOUT@/{bad=1} END{exit bad?0:1}' profile/grub/theme/theme.txt; then
+  bad "theme.txt: @TIMEOUT@ в label (GRUB не подставляет, будет литерал)"
 else
-  bad "theme.txt: нет label __timeout__ с @TIMEOUT@"
+  ok "theme.txt: в label нет @TIMEOUT@"
 fi
-# fixed5 (10.11.2026): id "__timeout__" должен быть РОВНО ОДИН на весь
-# theme.txt. В fixed4 их было два (progress_bar + label) — GRUB обновлял
-# только первый (progress_bar), и label показывал литерал «@TIMEOUT@».
-if [ "$(grep -c 'id = "__timeout__"' profile/grub/theme/theme.txt)" -eq 1 ]; then
-  ok "theme.txt: id __timeout__ ровно один (GRUB подставит число в label)"
+# fixed6 (11.11.2026): id "__timeout__" должен быть РОВНО ОДИН на весь
+# theme.txt и именно на progress_bar. В fixed4 их было два (progress_bar +
+# label) — GRUB обновлял только первый; в fixed5 остался только label —
+# GRUB не подставил ничего, и был литерал.
+if [ "$(grep -c 'id = "__timeout__"' profile/grub/theme/theme.txt)" -eq 1 ] && awk '/\+ progress_bar \{/{f=1} f&&/^\}/{f=0} f&&/id = "__timeout__"/{ok=1} END{exit ok?0:1}' profile/grub/theme/theme.txt; then
+  ok "theme.txt: id __timeout__ ровно один, на progress_bar"
 else
-  bad "theme.txt: id __timeout__ не один (найдено: $(grep -c 'id = "__timeout__"' profile/grub/theme/theme.txt)) — GRUB обновит только первый, будет литерал"
-fi
-if grep -q '+ progress_bar' profile/grub/theme/theme.txt; then
-  bad "theme.txt: есть progress_bar (fixed5: удалён — он перехватывал id __timeout__)"
-else
-  ok "theme.txt: progress_bar нет (не перехватывает __timeout__)"
+  bad "theme.txt: id __timeout__ не один или не на progress_bar (найдено: $(grep -c 'id = "__timeout__"' profile/grub/theme/theme.txt))"
 fi
 if grep -oP 'menuentry "\K[^"]+' profile/grub/grub.cfg | sed 's/%ARCH%/x86_64/g; s/${archiso_platform}/UEFI/g' | while IFS= read -r _l; do [ "$(printf '%s' "$_l" | LC_ALL=C.UTF-8 wc -m)" -gt 30 ] && echo "$_l"; done | grep -q .; then
   bad "grub.cfg: есть пункт меню длиннее 30 символов (обрежется pixmap)"
@@ -972,10 +969,12 @@ for f in xros-logo-real.png wallpaper-real.png; do
   if [[ -f "branding/$f" ]]; then ok "есть branding/$f (исходник)"; else bad "нет branding/$f (исходник)"; fi
 done
 gui_sha=$(sha256sum packages/xros-installer/xros-install-gui 2>/dev/null | cut -d' ' -f1)
-if [[ "$gui_sha" == "f81a1b184f715d4b97be72379220ae3b2f63896378c47b9b6d94c3da451ed254" ]]; then
-  ok "xros-install-gui (пакет): sha256 f81a1b18… (зафиксирован 10.11.2026)"
+# fixed5 (10.11.2026): бинарь пересобран (with_maximized) — sha256 обновлён
+# с f81a1b18… (fixed4) на e7350755…
+if [[ "$gui_sha" == "e73507550fa3e54e78407344dccc0a7d732f94bd7184361589d617242560c055" ]]; then
+  ok "xros-install-gui (пакет): sha256 e7350755… (fixed5, 10.11.2026)"
 else
-  bad "xros-install-gui (пакет): sha256 не совпадает с зафиксированным f81a1b18…"
+  bad "xros-install-gui (пакет): sha256 не совпадает с зафиксированным e7350755…"
 fi
 cli_sha=$(sha256sum packages/xros-cli/xros 2>/dev/null | cut -d' ' -f1)
 if [[ "$cli_sha" == "9c67cfdcc1b50998e05be1d0c9efd6d1325473731b8b7de6971ebe049954e1aa" ]]; then
