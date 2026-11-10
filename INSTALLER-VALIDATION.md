@@ -1,0 +1,110 @@
+# INSTALLER-VALIDATION.md — XrOS 1.0 (fixed5)
+
+Дата: 2026-11-10 / 2026-11-11 (Europe/Samara).
+ISO: `xros-1.0-fixed5-x86_64-hybrid.iso`, SHA256 `d1e57d3ad402c96dfb01acd46c7240b625d74c570b6df0ad6e1905138ae7b251`
+(plain `fb9e49a700a7079f203aa0c5dd5ae62100f0350237540636074da20315eb95f5`).
+QEMU 8.2.2, OVMF, std VGA, TCG (без KVM). Виртуальный диск 20 ГБ.
+
+## 1. GUI-установщик (Rust/egui, /usr/local/bin/xros-install-gui)
+
+| Проверка | Результат |
+|---|---|
+| Запуск из Live KDE (двойной самозапуск — см. §3) | PASS (окно открывается, максимизировано) |
+| Окно максимизировано, все кнопки видны (fixed5: `.with_maximized(true)`) | PASS |
+| Навигация клавиатурой (Tab/Enter) | PASS |
+| Welcome → Location (автоопределение Europe/Astrakhan) | PASS |
+| Keyboard (Русская) | PASS |
+| Desktop (KDE по умолчанию; KDE/GNOME/XFCE/Cinnamon/Sway/i3-wm/Без графики) | PASS |
+| Partitions (диск /dev/sda 20G обнаружен; «Очистить диск»; FS ext4 по умолчанию) | PASS |
+| Диалог подтверждения «Точно стереть диск /dev/sda?» | PASS (появляется) |
+| Подтверждение диалога клавиатурой | **FAIL** — Tab не доходит до кнопок диалога («Да, стереть» / «Отмена»); Tab циклит виджеты главного окна. Кнопки диалога не в порядке Tab. |
+| Подтверждение диалога мышью | **FAIL (harness)** — клики QEMU-монитора не регистрируются в Wayland-госте (курсор точно на кнопке, press+release — без эффекта). Ограничение стенда, не дефект установщика. |
+| Users / Summary / Install / Finish через GUI | SKIP — заблокировано диалогом (см. выше). |
+| Экран завершения «XrOS успешно установлена», чекбокс перезагрузки по умолчанию, кнопка «Завершить» | SKIP — не достигнут через GUI. |
+
+## 2. Движок установки (bash, /usr/local/bin/xros-install)
+
+Неинтерактивный режим: `XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF=/tmp/xros-install.conf xros-install`.
+Конфиг (9 ключей, режим 600): DISK, FS, USERNAME, USERPASS, ROOTPASS, AUTOLOGIN, TIMEZONE, KEYMAP, OFFICE.
+Дефолты движка: PARTMODE=erase, DE=kde, HOSTNAME=xros-os, FULLNAME=$USERNAME.
+
+### 2.1 Баг журнала установки (НАЙДЕН, воспроизведён 3×, обход найден)
+
+**Симптом:** движок падает на разметке:
+`[xros-install] ОШИБКА: sgdisk --zap-all не удался для /dev/sda — см. /tmp/xros-install.log`
+(код 1), хотя ручной `sudo sgdisk --zap-all /dev/sda` работает
+(«GPT data structures destroyed!»).
+
+**Первопричина:** НЕ sgdisk. Движок пишет вывод sgdisk в журнал
+`sgdisk --zap-all "$DISK" >>"$LOG" 2>&1` (src/xros-install:715 UEFI, :724 BIOS).
+Журнал `LOG=/tmp/xros-install.log` (:26) создаётся в начале скрипта
+(`: > "$LOG"`, :30; `chmod 600`, :31) при `umask 077` (:19) — то есть
+от пользователя xros (до sudo re-exec), владелец xros, режим 600.
+При повторном запуске root-процесс (sudo) НЕ может открыть этот файл
+на запись/добавление — `Permission denied` даже от root
+(строки 30 и 715; `tee` в `say()` тоже падает).
+Редирект `>>"$LOG"` падает → bash не запускает sgdisk → `||` считает,
+что sgdisk упал. Доказательства:
+- `/tmp` — 1777, `touch /tmp/test1` и `cat /tmp/test1` работают;
+- `lsattr /tmp/xros-install.log` — только `e`, без immutable;
+- файл `-rw------- xros:xros`, но `cat` от владельца xros — «Отказано в доступе»,
+  `sudo bash -c 'echo >> …'` — тоже «Отказано в доступе»;
+- после `sudo rm -f /tmp/xros-install.log` и запуска движка сразу от root
+  (лог создаётся root) — ошибок Permission denied НЕТ, sgdisk проходит.
+
+**Обход (проверен):** перед запуском удалить старый лог
+(`sudo rm -f /tmp/xros-install.log`) и запускать движок сразу от root:
+`XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF=/tmp/xros-install.conf sudo --preserve-env=XROS_NONINTERACTIVE,XROS_INSTALL_CONF /usr/local/bin/xros-install`.
+
+**Исправление в исходнике (для следующей сборки):** создавать/очищать журнал
+ПОСЛЕ перехода к root (после sudo re-exec), либо удалять чужой лог перед
+созданием, либо не делать падение sgdisk зависимым от доступности журнала.
+Статус: ЗАФИКСИРОВАНО здесь; в fixed5 НЕ исправлено (требует пересборки ISO).
+
+### 2.2 Ход установки UEFI (fixed5-uefi-grub, диск fixed-uefi.qcow2)
+
+- 2026-11-11 00:06 — движок запущен от root (обход §2.1), ошибок лога нет.
+- Разметка /dev/sda (ext4) — PASS; 30%.
+- Монтирование /dev/sda2 → /mnt/xros-install — PASS.
+- Копирование живой системы (rsync) — PASS; ядро 17M — PASS; 70%.
+- fstab — PASS; 85%.
+- chroot (locale, пользователи, GRUB) — В ПРОЦЕССЕ на 00:38.
+- **00:39–00:40 — ВМ ПОГИБЛА: перезапуск сервиса хоста убил QEMU (pid 2902).**
+  Установка прервана на 85% (chroot). Диск 4 756 865 024 Б (частичная установка).
+  QEMU/OVMF стёрты перезапуском; .deb-кэш пуст. Восстановлено:
+  убрано мёртвое зеркало cogentco из ubuntu.sources, `apt-get update`,
+  `apt-get install qemu-system-x86 qemu-system-gui qemu-utils qemu-block-extra
+  ovmf seabios ipxe-qemu xorriso squashfs-tools` → QEMU 8.2.2.
+- 2026-11-11 ~01:00 — ВМ перезапущена (run fixed5-uefi-grub2, pid 5387,
+  тот же диск fixed-uefi.qcow2). Повторная установка с нуля (erase) —
+  в процессе.
+
+## 3. Аномалии Live-среды (зафиксированы, не блокируют установку)
+
+- **Самопроизвольный двойной запуск GUI-установщика** (2026-11-10 ~22:15):
+  два sudo-процесса xros-install-gui (pid 1069, 1076) без ввода пользователя.
+  Причина не установлена (возможно, ложное срабатывание кнопки при фокусе).
+- **KRunner не запускается** (Meta / Alt+F2): «Could not activate remote peer
+  org.kde.krunner: startup job failed». Сервис `plasma-krunner.service`
+  имеет `TimeoutSec=5sec` — гипотеза: 5 с мало под TCG. Не доказано.
+- **Печать в QEMU под TCG ненадёжна:** символы двоятся/теряются при задержке
+  0.08 с; надёжно при 0.25 с на клавишу (typeq.py, 3-й аргумент).
+  `|` искажается; `<<` (heredoc) не работает — использовать `echo … >>`.
+- Движок удаляет конфиг `/tmp/xros-install.conf` после чтения (пароли) —
+  перед каждым запуском конфиг нужно создавать заново.
+
+## 4. Итог (промежуточный)
+
+- GUI: доведён клавиатурой до диалога подтверждения диска; диалог
+  клавиатурно недоступен (FAIL), мышь в QEMU не работает (harness).
+- Движок: баг журнала найден и обойдён; UEFI-установка идёт.
+- BIOS-установка: ещё не выполнена (после UEFI).
+- Установленная система (первая загрузка, права /usr и /etc): PENDING.
+
+## 5. Логи и скриншоты
+
+- `experiments/qemu-stage10/logs/fixed5-uefi-grub/` (serial.log, run-info.txt)
+- `experiments/qemu-stage10/screenshots/fixed5-uefi-grub-install-*.png`,
+  `fixed5-uefi-grub-step*.png`, `fixed5-uefi-grub-konsole-*.png`
+- Движок: `src/xros-install` (:19 umask, :26 LOG, :30–31 создание лога,
+  :715/:724 sgdisk, конфиг удаляется после чтения).
