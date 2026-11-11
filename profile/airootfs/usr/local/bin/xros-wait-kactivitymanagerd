@@ -1,0 +1,31 @@
+#!/bin/bash
+# XrOS fixed7 (11.11.2026): ждать, пока kactivitymanagerd объявит
+# себя на сессионной шине (org.kde.ActivityManager).
+#
+# Зачем: plasmashell падает с "Aborting shell load: The activity
+# manager daemon (kactivitymanagerd) is not running", если стартует
+# раньше, чем kactivitymanagerd успел зарегистрировать bus-name.
+# `After=plasma-kactivitymanagerd.service` в drop-in гарантирует
+# только порядок запуска, а не готовность: у kactivitymanagerd
+# Type=simple, и systemd считает его "запущенным" сразу после fork'а,
+# хотя до появления bus-name проходит до ~27 с под медленным TCG
+# (доказано журналом установленной системы fixed5: plasmashell
+# в 22:16:58, kactivitymanagerd — только в 22:17:26).
+#
+# Скрипт вызывается как ExecStartPre plasma-plasmashell.service.
+# Он НИКОГДА не роняет запуск: при любом сбое (нет шины, нет busctl)
+# просто выходит 0 после таймаута, и plasmashell стартует как раньше.
+# Под TCG один вызов busctl может занимать ~1 с, поэтому 60 итераций
+# по 0.5 с — это до ~60 с реального времени; TimeoutStartSec=120s
+# в drop-in покрывает это с запасом.
+
+for _ in $(seq 1 60); do
+  if busctl --user status org.kde.ActivityManager >/dev/null 2>&1; then
+    exit 0
+  fi
+  sleep 0.5
+done
+
+# Таймаут: ActivityManager так и не появился — не блокируем стол,
+# plasmashell попробует сам (как до fixed7).
+exit 0

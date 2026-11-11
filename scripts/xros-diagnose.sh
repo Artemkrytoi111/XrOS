@@ -395,6 +395,21 @@ if grep -q 'request_focus' src/xros-install-gui-rs/src/app.rs && [[ packages/xro
 else
   bad "xros-install-gui: нет request_focus в app.rs или бинарь старше исходников"
 fi
+# fixed7 (11.11.2026): надёжное ожидание ActivityManager перед
+# запуском plasmashell — After= для Type=simple гарантирует только
+# порядок fork'а, а не готовность bus-name (разрыв до 27 с под TCG,
+# установленная система fixed5: plasmashell сдавался без ретрая).
+# Drop-in должен ссылаться на скрипт ожидания, скрипт — быть
+# исполняемым, а стартовый таймаут — покрывать ожидание (~60 с).
+DROPIN="profile/airootfs/etc/systemd/user/plasma-plasmashell.service.d/10-kactivitymanagerd.conf"
+WAITBIN="profile/airootfs/usr/local/bin/xros-wait-kactivitymanagerd"
+if grep -q 'ExecStartPre=/usr/local/bin/xros-wait-kactivitymanagerd' "$DROPIN" \
+   && grep -q 'TimeoutStartSec=120s' "$DROPIN" \
+   && [[ -x "$WAITBIN" ]] && grep -q 'org.kde.ActivityManager' "$WAITBIN"; then
+  ok "plasma-plasmashell drop-in: ExecStartPre (wait ActivityManager) + TimeoutStartSec=120s, скрипт исполняемый"
+else
+  bad "plasma-plasmashell drop-in: нет ExecStartPre/TimeoutStartSec или скрипт xros-wait-kactivitymanagerd не исполняемый/без проверки шины"
+fi
 if cmp -s packages/xros-branding/banner.txt profile/airootfs/usr/share/xros/banner.txt; then
   ok "banner.txt синхронен (пакет == airootfs)"
 else
@@ -980,8 +995,10 @@ done
 gui_sha=$(sha256sum packages/xros-installer/xros-install-gui 2>/dev/null | cut -d' ' -f1)
 # fixed5 (10.11.2026): бинарь пересобран (with_maximized) — sha256 обновлён
 # с f81a1b18… (fixed4) на e7350755…
-if [[ "$gui_sha" == "e73507550fa3e54e78407344dccc0a7d732f94bd7184361589d617242560c055" ]]; then
-  ok "xros-install-gui (пакет): sha256 e7350755… (fixed5, 10.11.2026)"
+# fixed7 (11.11.2026): бинарь пересобран (фокус диалога, request_focus) —
+# sha256 обновлён с e7350755… (fixed5) на b533b9ff…
+if [[ "$gui_sha" == "b533b9ffa2179e955f6dfcd398715c734b15949cf616e6a88794777ca394f18a" ]]; then
+  ok "xros-install-gui (пакет): sha256 b533b9ff… (fixed7, 11.11.2026)"
 else
   bad "xros-install-gui (пакет): sha256 не совпадает с зафиксированным e7350755…"
 fi
