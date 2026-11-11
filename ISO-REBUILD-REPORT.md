@@ -85,6 +85,33 @@ OVMF (SHA256 `ad23261d43116abc3747d59a7837fbf578c9586a8993f4eeba064cd07eccb083`)
   тема содержит label `__timeout__`.
 - UUID гибрида `2026-11-10-16-32-22-00`, LABEL `XROS_202611`.
 
+## fixed7 — ожидание ActivityManager (Plasma race) + фокус диалогов установщика
+
+Дата: 11 ноября 2026. (fixed5/fixed6 — см. `out/SHA256SUMS.fixed5`,
+`out/SHA256SUMS.fixed6` и коммиты git; в этот отчёт не вносились.)
+
+- Изменения: drop-in `plasma-plasmashell.service.d/10-kactivitymanagerd.conf`
+  дополнен `ExecStartPre=/usr/local/bin/xros-wait-kactivitymanagerd`
+  (опрос `busctl --user status org.kde.ActivityManager`, до ~60 с,
+  всегда exit 0) + `TimeoutStartSec=120s` (базовый юнит: TimeoutSec=40s).
+  Скрипт добавлен в `file_permissions` profiledef.sh (без этого в rootfs
+  он был бы 644: сборка копирует airootfs через `cp --no-preserve=mode`).
+  Поймано и исправлено до сборки ISO (первая пересборка rootfs дала
+  644 — см. коммит 5400aa7). Установщик: фокус клавиатуры на кнопках
+  диалогов (`request_focus`, xros-installer 1.0-3). Диагностика:
+  PASS=244 FAIL=0 SKIP=11.
+- pacstrap EXIT 0 (rootfs 4,1 ГБ, 181 152 файла; шаг проверки прав:
+  0 каталогов 2770, 0 файлов 660/770). `out/pacstrap-build-fixed7b.log`.
+  mkarchiso EXIT 0 → plain ISO 1 855 145 984 Б, SHA256
+  `92d7b2426ec1ba09510e9c032629e4e5b8e456de2962d13e3dbe14e9bdbc722d`.
+- Гибрид 1 855 457 280 Б, SHA256
+  `f8094a1bf9abc42b65c979d1f57d545453dfe02027d80187ef43ef653d151c29`
+  (BIOS El Torito ЕСТЬ, UEFI El Torito ЕСТЬ, MBR grub2-mbr,
+  Volume id XROS_202611). `out/SHA256SUMS.fixed7` (оба OK).
+- `check-iso.sh` (без --archiso) PASS=10 FAIL=0 SKIP=2.
+  `out/check-iso-fixed7.log`.
+- fixed4/5/6 сохранены в `out/` (plain + hybrid + SHA256SUMS).
+
 ## Исходный ISO (сохранён)
 
 - Plain `e2ac86e0e2ffc7614f50aad337c1130ec40f49213e7c7e8a86b6b8a780a0c21a`,
