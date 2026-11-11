@@ -112,6 +112,32 @@ OVMF (SHA256 `ad23261d43116abc3747d59a7837fbf578c9586a8993f4eeba064cd07eccb083`)
   `out/check-iso-fixed7.log`.
 - fixed4/5/6 сохранены в `out/` (plain + hybrid + SHA256SUMS).
 
+## fixed8 — GRUB countdown через @TIMEOUT_NOTIFICATION_SHORT@
+
+Дата: 11 ноября 2026. Причина: fixed7 показал в меню GRUB литерал
+«@TIMEOUT@» — предположение fixed6 (GRUB подставляет @TIMEOUT@ в
+progress_bar) неверно для GRUB 2.16. Доказательство: `strings
+gfxmenu.mod` — только `__timeout__` и `@TIMEOUT_NOTIFICATION_LONG@` /
+`_MIDDLE@` / `_SHORT@` (SHORT — "%ds"). Текст темы изменён на
+«Автозагрузка через @TIMEOUT_NOTIFICATION_SHORT@» (рендерится
+«Автозагрузка через 7s») в обоих theme.txt (ISO GRUB +
+Live/установленная). Проверка §7з исправлена (старая ТРЕБОВАЛА
+литерал), новая проверка §15 запрещает литерал в строках `text =`.
+Диагностика: PASS=245 FAIL=0 SKIP=11.
+
+- pacstrap EXIT 0 (rootfs 4,1 ГБ, 181 152 файла; права PASS).
+  `out/pacstrap-build-fixed8.log`. В новом rootfs: тема с SHORT,
+  `xros-wait-kactivitymanagerd` — `-rwxr-xr-x` (755).
+  mkarchiso EXIT 0 → plain ISO 1 855 145 984 Б, SHA256
+  `d8a2af390420e362883f0a715d0bb5e282087b36e57d0ade8d8d389f443d1201`.
+- Гибрид 1 855 457 280 Б, SHA256
+  `9948646de5dac60bacc10266c312823ee4d3a2acbab1dbaf0d639b02eebf0f7e`
+  (BIOS El Torito ЕСТЬ, UEFI El Torito ЕСТЬ, MBR grub2-mbr,
+  Volume id XROS_202611). `out/SHA256SUMS.fixed8` (оба OK).
+- `check-iso.sh` (без --archiso) PASS=10 FAIL=0 SKIP=2.
+  `out/check-iso-fixed8.log`.
+- fixed4/5/6/7 сохранены в `out/` (plain + hybrid + SHA256SUMS).
+
 ## Исходный ISO (сохранён)
 
 - Plain `e2ac86e0e2ffc7614f50aad337c1130ec40f49213e7c7e8a86b6b8a780a0c21a`,
