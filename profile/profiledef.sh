@@ -46,5 +46,6 @@ file_permissions=(
   ["/usr/local/bin/xros-welcome"]="0:0:755"
   ["/usr/local/bin/xros-welcome-gui"]="0:0:755"
   ["/usr/local/bin/xros-set-wallpaper"]="0:0:755"
+  ["/usr/local/bin/xros-wait-kactivitymanagerd"]="0:0:755"
   ["/usr/local/bin/livecd-sound"]="0:0:755"
 )

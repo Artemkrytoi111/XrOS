@@ -410,6 +410,16 @@ if grep -q 'ExecStartPre=/usr/local/bin/xros-wait-kactivitymanagerd' "$DROPIN" \
 else
   bad "plasma-plasmashell drop-in: нет ExecStartPre/TimeoutStartSec или скрипт xros-wait-kactivitymanagerd не исполняемый/без проверки шины"
 fi
+# Скрипт ожидания должен быть и в file_permissions (profiledef.sh):
+# сборка копирует airootfs через cp --no-preserve=mode (всё становится
+# 644), а +x восстанавливается ТОЛЬКО по file_permissions. Без записи
+# скрипт попал бы в rootfs/ISO как 644 и ExecStartPre не запустился бы
+# (поймано на пересборке fixed7: в rootfs был -rw-r--r--).
+if grep -q 'xros-wait-kactivitymanagerd"\]="0:0:755"' profile/profiledef.sh; then
+  ok "xros-wait-kactivitymanagerd в file_permissions (755 в rootfs/ISO)"
+else
+  bad "xros-wait-kactivitymanagerd НЕТ в file_permissions — в ISO будет 644, ExecStartPre не запустится"
+fi
 if cmp -s packages/xros-branding/banner.txt profile/airootfs/usr/share/xros/banner.txt; then
   ok "banner.txt синхронен (пакет == airootfs)"
 else
