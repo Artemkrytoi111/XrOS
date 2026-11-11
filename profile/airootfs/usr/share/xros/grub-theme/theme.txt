@@ -47,7 +47,7 @@ terminal-box: "terminal_box_*.png"
   top = 84%
   width = 50%
   height = 20
-  text = "Автозагрузка через @TIMEOUT@ с"
+  text = "Автозагрузка через @TIMEOUT_NOTIFICATION_SHORT@"
   font = "DejaVu Sans 12"
   text_color = "#f5f3fa"
   fg_color = "#8b00ff"
@@ -61,3 +61,10 @@ terminal-box: "terminal_box_*.png"
 # fixed5-label показывал литерал "@TIMEOUT@"). Поэтому обратный отсчёт —
 # это progress_bar: число в тексте + заполнение фиолетовым. Label с
 # @TIMEOUT@ удалён; единственный компонент с id "__timeout__" — этот bar.
+# 11.11.2026 (fixed8): ОШИБКА fixed6: @TIMEOUT@ GRUB НЕ подставляет
+# вообще — в fixed7 меню показало литерал "@TIMEOUT@". Доказательство:
+# strings gfxmenu.mod (GRUB 2.16) содержит только __timeout__ и
+# @TIMEOUT_NOTIFICATION_LONG@ / _MIDDLE@ / _SHORT@ (замены:
+# LONG — "The highlighted entry will be executed automatically in %ds.",
+# MIDDLE — "%ds remaining.", SHORT — "%ds"). Поэтому здесь SHORT:
+# "Автозагрузка через 7s".

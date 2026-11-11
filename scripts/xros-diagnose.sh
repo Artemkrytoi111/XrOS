@@ -420,6 +420,20 @@ if grep -q 'xros-wait-kactivitymanagerd"\]="0:0:755"' profile/profiledef.sh; the
 else
   bad "xros-wait-kactivitymanagerd НЕТ в file_permissions — в ISO будет 644, ExecStartPre не запустится"
 fi
+# fixed8 (11.11.2026): GRUB НЕ подставляет @TIMEOUT@ вообще —
+# в fixed7 меню показало литерал. Доказано strings gfxmenu.mod
+# (GRUB 2.16): есть только @TIMEOUT_NOTIFICATION_LONG@/_MIDDLE@/_SHORT@
+# (SHORT — "%ds"). Обе темы (ISO и Live/установленная) обязаны быть
+# без литерала @TIMEOUT@, с SHORT-плейсхолдером и идентичны друг другу.
+if ! grep -q '@TIMEOUT@' profile/grub/theme/theme.txt \
+   && ! grep -q '@TIMEOUT@' profile/airootfs/usr/share/xros/grub-theme/theme.txt \
+   && grep -q '@TIMEOUT_NOTIFICATION_SHORT@' profile/grub/theme/theme.txt \
+   && grep -q '@TIMEOUT_NOTIFICATION_SHORT@' profile/airootfs/usr/share/xros/grub-theme/theme.txt \
+   && cmp -s profile/grub/theme/theme.txt profile/airootfs/usr/share/xros/grub-theme/theme.txt; then
+  ok "тема GRUB: без литерала @TIMEOUT@, countdown через @TIMEOUT_NOTIFICATION_SHORT@, ISO == Live"
+else
+  bad "тема GRUB: есть литерал @TIMEOUT@, нет SHORT-плейсхолдера или темы ISO/Live расходятся"
+fi
 if cmp -s packages/xros-branding/banner.txt profile/airootfs/usr/share/xros/banner.txt; then
   ok "banner.txt синхронен (пакет == airootfs)"
 else
