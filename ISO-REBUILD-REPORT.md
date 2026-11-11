@@ -138,6 +138,31 @@ Live/установленная). Проверка §7з исправлена (�
   `out/check-iso-fixed8.log`.
 - fixed4/5/6/7 сохранены в `out/` (plain + hybrid + SHA256SUMS).
 
+## fixed9 — GRUB countdown как %d printf-шаблон
+
+Дата: 11 ноября 2026. Причина: fixed8 показал литерал
+«@TIMEOUT_NOTIFICATION_SHORT@». Точный механизм — исходник GRUB
+`grub-core/gfxmenu/gui_progress_bar.c`, `progress_bar_set_property()`:
+плейсхолдеры сравниваются через `grub_strcmp` СО ВСЕМ значением
+`text` (точное совпадение), а не как подстрока. Правильно: `text` —
+printf-шаблон, `draw_text()` делает `grub_xasprintf(template,
+|value|)` — `%d` заменяется на секунды до автозагрузки.
+`text = "Автозагрузка через %d с"` рендерится «Автозагрузка через 7 с».
+Проверки §7з и §15 исправлены: требуют `%d`-шаблон, запрещают любой
+литерал `@...@` в строках `text =`. Диагностика: PASS=245 FAIL=0 SKIP=11.
+
+- pacstrap EXIT 0 (rootfs 4,1 ГБ, 181 152 файла; права PASS).
+  `out/pacstrap-build-fixed9.log`. mkarchiso EXIT 0 → plain ISO
+  1 855 145 984 Б, SHA256
+  `d62a997810cf6ade3dd7ca795989acc7773554fb108da0f2bf0e080b357789a1`.
+- Гибрид 1 855 457 280 Б, SHA256
+  `becd7645a1508d963742fd2aeaf518024f7cef88d08f65aef665a715a7708f0c`
+  (BIOS El Torito ЕСТЬ, UEFI El Torito ЕСТЬ, MBR grub2-mbr,
+  Volume id XROS_202611). `out/SHA256SUMS.fixed9` (оба OK).
+- `check-iso.sh` (без --archiso) PASS=10 FAIL=0 SKIP=2.
+  `out/check-iso-fixed9.log`.
+- fixed4/5/6/7/8 сохранены в `out/` (plain + hybrid + SHA256SUMS).
+
 ## Исходный ISO (сохранён)
 
 - Plain `e2ac86e0e2ffc7614f50aad337c1130ec40f49213e7c7e8a86b6b8a780a0c21a`,
