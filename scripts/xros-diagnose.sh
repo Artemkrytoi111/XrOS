@@ -422,6 +422,24 @@ if grep -q 'xros-wait-kactivitymanagerd"\]="0:0:755"' profile/profiledef.sh; the
 else
   bad "xros-wait-kactivitymanagerd НЕТ в file_permissions — в ISO будет 644, ExecStartPre не запустится"
 fi
+# Diamond (fixed10, 11.11.2026): лаунчер xros-installer-diamond обязан быть
+# в file_permissions, иначе в ISO он 644 и установщик не запускается ни из
+# приветствия, ни с рабочего стола (поймано в Live BIOS: sudo сообщало
+# «команда не найдена», файл был -rw-r--r--, хотя в профиле 755).
+if grep -q 'xros-installer-diamond"\]="0:0:755"' profile/profiledef.sh; then
+  ok "xros-installer-diamond в file_permissions (755 в rootfs/ISO, установщик запускается)"
+else
+  bad "xros-installer-diamond НЕТ в file_permissions — в ISO будет 644, Diamond не запустится"
+fi
+# fixed10 (11.11.2026, D1): сам kactivitymanagerd должен стартовать
+# ПОСЛЕ kwin_wayland — иначе падает «no Qt platform plugin» (нет
+# Wayland-сокета). Дроп-ин After=plasma-kwin_wayland.service.
+KACT_DROPIN="profile/airootfs/etc/systemd/user/plasma-kactivitymanagerd.service.d/10-after-kwin.conf"
+if grep -q 'After=plasma-kwin_wayland.service' "$KACT_DROPIN" 2>/dev/null; then
+  ok "kactivitymanagerd drop-in: After=plasma-kwin_wayland.service (нет падения до появления дисплея)"
+else
+  bad "kactivitymanagerd drop-in 10-after-kwin.conf отсутствует или без After=kwin_wayland (падение при старте сессии)"
+fi
 # fixed9 (11.11.2026): GRUB НЕ подставляет @TIMEOUT@ вообще, а
 # @TIMEOUT_NOTIFICATION_*@ — только как ВСЁ значение text (точное
 # grub_strcmp; fixed7 и fixed8 показали литералы). Правильный
@@ -970,11 +988,14 @@ else
   bad "тест test-de-none.sh отсутствует или не исполняемый"
 fi
 
-# 20и. Пакетные списки: 46 пакетов живой системы; все 16 графических
-# пакетов из XROS_GRAPHICS_PKGS входят в packages.x86_64.
+# 20и. Пакетные списки: 49 пакетов живой системы (было 48; +1 — memtest86+:
+# меню в стиле EndeavourOS, 11.11.2026; до этого 47 + which, fixed10, D9;
+# qt6-declarative добавлен для Diamond, 11.11.2026; qt6-quickcontrols2 в Arch не
+# существует — QtQuick.Controls 2 входит в qt6-declarative); все 16
+# графических пакетов из XROS_GRAPHICS_PKGS входят в packages.x86_64.
 pkgs_now=$(grep -v '^\s*#' profile/packages.x86_64 | grep -v '^\s*$' || true)
 pkg_n=$(echo "$pkgs_now" | wc -l)
-if [[ "$pkg_n" -eq 46 ]]; then ok "packages.x86_64: 46 пакетов"; else bad "packages.x86_64: пакетов $pkg_n, ожидалось 46"; fi
+if [[ "$pkg_n" -eq 49 ]]; then ok "packages.x86_64: 49 пакетов"; else bad "packages.x86_64: пакетов $pkg_n, ожидалось 49"; fi
 gfx_missing=""
 for p in $gfx_list; do
   echo "$pkgs_now" | grep -qx "$p" || gfx_missing="$gfx_missing $p"

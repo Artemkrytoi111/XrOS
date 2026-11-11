@@ -203,6 +203,10 @@ step "Сборка Rust --offline в build-env"
 step "Стейджинг исходников в packages/"
 cp "$ROOT/src/xros-install" "$ROOT/packages/xros-installer/xros-install"
 cp "$ROOT/src/xros-welcome-gui" "$ROOT/packages/xros-welcome/xros-welcome-gui"
+# Diamond: staged-копия приложения для пакета xros-installer.
+rm -rf "$ROOT/packages/xros-installer/xros-installer-diamond"
+cp -r "$ROOT/src/xros-installer-diamond" "$ROOT/packages/xros-installer/xros-installer-diamond"
+rm -rf "$ROOT/packages/xros-installer/xros-installer-diamond/__pycache__"
 cp "$ROOT/branding/xros-logo.png" "$ROOT/branding/xros-logo-small.png" \
    "$ROOT/branding/wallpaper.png" "$ROOT/branding/wallpaper.jpg" \
    "$ROOT/branding/grub-bg.jpg" "$ROOT/branding/grub-bg.png" \
@@ -223,6 +227,20 @@ for pkg in xros-cli xros-installer xros-welcome xros-branding; do
         || die "нет готового пакета в packages/$pkg"
 done
 echo "Все 4 пакета собраны"
+# fixed10: свежие пакеты — в локальный репозиторий (шаг 7 repo-add берёт
+# *.pkg.tar.zst именно оттуда; раньше новый пакет приходилось копировать
+# вручную, и репозиторий отставал от ISO на версию). Старые версии того
+# же пакета удаляются; режим 644 — makepkg под umask 0007 даёт 640.
+for pkg in xros-cli xros-installer xros-welcome xros-branding; do
+    rm -f "$ROOT/repo/xros/os/x86_64/$pkg"-*.pkg.tar.zst
+    # makepkg оставляет в packages/ ВСЕ ранее собранные версии; копировать
+    # надо только свежую (иначе старые 1.0-2/3/4 возвращаются в репозиторий
+    # и диагностика падает «пакетов 7, ожидалось 4» — поймано 11.11.2026).
+    ls -t "$ROOT/packages/$pkg"/*.pkg.tar.zst 2>/dev/null | tail -n +2 | xargs -r rm -f
+    cp "$ROOT/packages/$pkg"/*.pkg.tar.zst "$ROOT/repo/xros/os/x86_64/"
+    chmod 644 "$ROOT/repo/xros/os/x86_64/$pkg"-*.pkg.tar.zst
+done
+echo "Пакеты скопированы в локальный репозиторий"
 
 # --- шаг 7: репозиторий ------------------------------------------------------------
 step "Обновление локального репозитория (repo-add в build-env)"
@@ -236,6 +254,8 @@ step "Снимок репозитория в profile/airootfs/usr/share/xros/rep
 REPO_SNAP="$PROFILE/airootfs/usr/share/xros/repo"
 rm -rf "$REPO_SNAP"
 mkdir -p "$REPO_SNAP"
+# Режим снимка — 0755 явно: mkdir -p под umask 0007 даёт 0770,
+# а диагностика требует 0755 (fixed10, Этап 2, 11.11.2026).
 # Копирование — НЕ cp -a, по двум причинам (обе проверены 2026-11-10):
 # 1) cp -a здесь падает с EPERM: на этом хосте (user namespace +
 #    btrfs + setgid-родители 2770) chown для сохранения владельца
@@ -260,12 +280,31 @@ cp "$ROOT/packages/xros-installer/xros-install-gui" "$BIN_DIR/xros-install-gui"
 cp "$ROOT/src/xros-install" "$BIN_DIR/xros-install"
 cp "$ROOT/src/xros-welcome" "$BIN_DIR/xros-welcome"
 cp "$ROOT/src/xros-welcome-gui" "$BIN_DIR/xros-welcome-gui"
+# Diamond: приложение (PyQt6 + QML) — в /usr/local/lib, лаунчер — в bin.
+DIAMOND_SRC="$ROOT/src/xros-installer-diamond"
+DIAMOND_LIB="$PROFILE/airootfs/usr/local/lib/xros-installer-diamond"
+rm -rf "$DIAMOND_LIB"
+mkdir -p "$DIAMOND_LIB"
+cp "$DIAMOND_SRC/main.py" "$DIAMOND_SRC/bridge.py" "$DIAMOND_LIB/"
+cp -r "$DIAMOND_SRC/qml" "$DIAMOND_LIB/"
+rm -rf "$DIAMOND_LIB/qml/__pycache__"
+cp "$DIAMOND_SRC/xros-installer-diamond" "$BIN_DIR/xros-installer-diamond"
+# Режимы Diamond — явно: cp под umask 0007 даёт каталоги 0770
+# и файлы 0660, а диагностика требует 0755/0644
+# (fixed10, Этап 2, 11.11.2026; исходники src/xros-installer-diamond
+# тоже нормализованы: каталоги 0755, файлы 0644, лаунчер 0755).
+find "$DIAMOND_LIB" -type d -exec chmod 755 {} +
+find "$DIAMOND_LIB" -type f -exec chmod 644 {} +
+chmod 755 "$PROFILE/airootfs/usr/local/lib"
 chmod 755 "$BIN_DIR/xros" "$BIN_DIR/xros-install-gui" "$BIN_DIR/xros-install" \
-          "$BIN_DIR/xros-welcome" "$BIN_DIR/xros-welcome-gui"
-for b in xros xros-install-gui xros-install xros-welcome xros-welcome-gui; do
+          "$BIN_DIR/xros-welcome" "$BIN_DIR/xros-welcome-gui" \
+          "$BIN_DIR/xros-installer-diamond"
+for b in xros xros-install-gui xros-install xros-welcome xros-welcome-gui xros-installer-diamond; do
     [[ -x "$BIN_DIR/$b" ]] || die "нет исполняемого $BIN_DIR/$b"
 done
-echo "Бинари в живой системе: 5 файлов"
+[[ -f "$DIAMOND_LIB/main.py" && -f "$DIAMOND_LIB/bridge.py" && -d "$DIAMOND_LIB/qml" ]] \
+  || die "Diamond не скопирован в живую систему"
+echo "Бинари в живой системе: 6 файлов + Diamond"
 
 # --- шаг 10: mkarchiso внутри build-env rootfs ---------------------------------------
 step "mkarchiso внутри build-env rootfs (штатный archiso 92)"

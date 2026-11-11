@@ -749,6 +749,16 @@ run_install() {
     --exclude='/etc/ssh/ssh_host_*' --exclude='/etc/pacman.d/gnupg/*' \
     / "$TARGET"/ >>"$LOG" 2>&1 || { say "ОШИБКА: копирование живой системы не удалось — см. $LOG"; exit 1; }
 
+  # Корень установленной системы — 0755 (fixed10, Этап 2): rsync -aAX
+  # переносит режим корня живой системы (в ISO он 555); ставим явно.
+  # Только корень, без рекурсии — остальное rsync уже выставил верно.
+  chmod 755 "$TARGET" || say "ВНИМАНИЕ: не удалось задать 0755 на корень установленной системы"
+
+  # MOTD установленной системы (fixed10, D5): Live-MOTD из профиля
+  # копируется rsync'ом — заменяем текстом установленной системы.
+  printf '%s\n' 'Добро пожаловать в XrOS 1.0 — установленная система на базе Arch Linux.' > "$TARGET/etc/motd" \
+    || say "ВНИМАНИЕ: не удалось записать /etc/motd установленной системы"
+
   # ВАЖНО: в живой системе archiso ядро и initramfs НЕ лежат в /boot —
   # сборщик выносит их на сам ISO (/xros/boot/x86_64/), а /boot в живой
   # системе пустой. Без этого шага mkinitcpio падает, а установленная
@@ -856,6 +866,21 @@ systemd-machine-id-setup || true
 useradd -m -G wheel,audio,video,optical,storage -s /bin/bash -c $FULLNAME_Q $USERNAME_Q || useradd -m -G wheel -s /bin/bash -c $FULLNAME_Q $USERNAME_Q
 echo root:$ROOTPASS_Q | chpasswd
 echo $USERNAME_Q:$USERPASS_Q | chpasswd
+# Обои XrOS для нового пользователя (fixed10, D4): тот же one-shot
+# механизм, что и в живой системе (xros-set-wallpaper + autostart).
+# Готовый appletsrc НЕ копируем: Plasma 6.8 мигрирует чужой appletsrc
+# и ломает стол (доказано на fixed2/fixed3).
+mkdir -p /home/$USERNAME_Q/.config/autostart
+cat > /home/$USERNAME_Q/.config/autostart/xros-wallpaper.desktop <<'WALL_EOF'
+[Desktop Entry]
+Type=Application
+Name=XrOS Wallpaper
+Comment=Установить обои XrOS по умолчанию (один раз)
+Exec=/usr/local/bin/xros-set-wallpaper
+X-KDE-autostart-after=panel
+NoDisplay=true
+WALL_EOF
+chown -R $USERNAME_Q:$USERNAME_Q /home/$USERNAME_Q/.config/autostart
 echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/wheel
 chmod 440 /etc/sudoers.d/wheel
 systemctl enable NetworkManager.service
@@ -1028,6 +1053,18 @@ CHROOT_EOF
       mkdir -p "$TARGET/etc/lightdm/lightdm.conf.d"
       printf '[Seat:*]\nautologin-user=%s\nautologin-session=%s\nuser-session=%s\ngreeter-session=lightdm-gtk-greeter\n' "$USERNAME" "$DE" "$DE" > "$TARGET/etc/lightdm/lightdm.conf.d/xros-autologin.conf"
     fi
+  fi
+
+  # Синхронизация баз pacman в установленной системе (fixed10, D12):
+  # после rsync в системе нет БД (pacman -Sl не работает). Только sync,
+  # без -Su — риска частичного обновления нет. Нужен resolv.conf, поэтому
+  # ДО его удаления ниже. При сбое сети — явное предупреждение, установка
+  # не падает (БД можно синхронизировать позже вручную).
+  say "Синхронизация баз пакетов в установленной системе..."
+  if arch-chroot "$TARGET" pacman -Sy --noconfirm >>"$LOG" 2>&1; then
+    say "Базы пакетов синхронизированы"
+  else
+    say "ВНИМАНИЕ: не удалось синхронизировать базы pacman (нет интернета?) — в установленной системе выполните: sudo pacman -Sy"
   fi
 
   # resolv.conf живой системы — только после всех сетевых операций

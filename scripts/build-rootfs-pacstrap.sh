@@ -261,6 +261,24 @@ cp -af --no-preserve=ownership,mode -- /xros/profile/airootfs/. /xros/work/x86_6
 # каталоги 2770 -> 755, файлы 660 -> 644, 770 -> 755, 640 -> 644.
 # Явные file_permissions из profiledef.sh применяются ДАЛЬШЕ и имеют
 # приоритет (/root 750, /etc/shadow 400 и т.д.).
+# --- fixed10 (ТЗ 11.11.2026, Этап 2): сначала снять ВСЕ спецбиты ---
+# Дефект fixed9: каталоги 2755 (setgid + 755) проходили мимо всех
+# нормализаций — они целятся в ТОЧНЫЕ режимы (2770/660/770/640), а 2755
+# нигде не проверялся (check-rootfs-perms.sh его даже явно принимал).
+# Снимаем биты ДО точной нормализации: 2660 -> 0660 -> 0644 и т.д.
+# На этом шаге в airootfs ТОЛЬКО содержимое профиля (pacstrap ещё не
+# запускался): легитимных спецбитов здесь быть не должно. Каталогам
+# ставим 755 явно (в профиле все каталоги 755, кроме /root 750 — у него
+# спецбитов нет, и file_permissions задаёт его позже).
+log "Снятие спецбитов (suid/sgid/sticky) в airootfs после копии профиля..."
+"$BUILD_ENV" --exec -- bash -c '
+set -euo pipefail
+A=/xros/work/x86_64/airootfs
+echo "  каталогов со спецбитами: $(find "$A" -type d -perm /6000 | wc -l), файлов: $(find "$A" -type f -perm /6000 | wc -l)"
+find "$A" -type d -perm /6000 -exec chmod 755 {} +
+find "$A" -type f -perm /6000 -exec chmod a-s {} +
+echo "  после снятия: каталогов: $(find "$A" -type d -perm /6000 | wc -l), файлов: $(find "$A" -type f -perm /6000 | wc -l)"
+' || die "снятие спецбитов в airootfs не удалось"
 log "Нормализация прав профиля в airootfs (2770->755, 660->644, 770->755, 640->644)..."
 "$BUILD_ENV" --exec -- bash -c '
 set -euo pipefail
@@ -499,6 +517,26 @@ if [[ -n "$D_LEFT" ]]; then echo "ОСТАЛИСЬ каталоги 2770:"; echo
 if [[ -n "$F_LEFT" ]]; then echo "ОСТАЛИСЬ файлы 660/770:"; echo "$F_LEFT"; exit 1; fi
 echo "  после нормализации: 2770/660/770 не осталось (кроме разрешённых: btmp/lastlog 660 root:utmp)"
 ' || die "проверка прав rootfs не пройдена (см. список выше)"
+# --- fixed10 (ТЗ 11.11.2026, Этап 2): явные режимы корня и защита от 2755 ---
+# В fixed9 /usr и /etc оказались 2755, а / — 555 (для / механизм не
+# установлен полностью: ctime 09:10:47, во время pacstrap). После pacstrap
+# и customize ставим их ЯВНО в 0755 и снимаем setgid с каталогов публичных
+# путей (usr/etc/home/opt/srv — там спецбитов быть не должно). Легитимные
+# режимы пакетов НЕ трогаем: /var/log/journal (2755 systemd-journal),
+# /var/lib/tpm2-tss/*, /run/* (tmpfs, в установку не копируется) — только
+# сообщаем их количество для видимости.
+log "--- шаг 11б (fixed10): явные режимы / /usr /etc = 0755, снятие setgid с публичных путей ---"
+"$BUILD_ENV" --exec -- bash -c '
+set -euo pipefail
+A=/xros/work/x86_64/airootfs
+chmod 755 "$A" "$A/usr" "$A/etc"
+for p in usr etc home opt srv; do
+  find "$A/$p" -type d -perm /2000 -exec chmod a-s {} + 2>/dev/null || true
+done
+echo "  режимы: / = $(stat -c %a "$A"), /usr = $(stat -c %a "$A/usr"), /etc = $(stat -c %a "$A/etc")"
+echo "  каталогов с setgid в публичных путях после снятия: $(find "$A/usr" "$A/etc" "$A/home" "$A/opt" "$A/srv" -type d -perm /2000 2>/dev/null | wc -l)"
+echo "  каталогов с setgid вне публичных путей (legit: journal/tpm2-tss/run, только для сведения): $(find "$A" -type d -perm /2000 2>/dev/null | grep -vE "^$A/(usr|etc|home|opt|srv)(/|$)" | wc -l)"
+' || die "явные режимы / /usr /etc не заданы"
 # Доступность для живого пользователя xros (uid 1000): то, что раньше
 # падало с EACCES, теперь должно читаться/исполняться от xros.
 "$BUILD_ENV" --exec -- arch-chroot /xros/work/x86_64/airootfs bash -c '

@@ -52,7 +52,7 @@ BUILD_ENV="$ROOT/scripts/xros-build-env.sh"
 
 # Модули BIOS-GRUB: список mkarchiso 92 для UEFI (_make_bootmode_uefi.grub)
 # минус EFI-модули, плюс BIOS-модули. Проверен в эксперименте.
-BIOS_MODS="all_video at_keyboard boot btrfs cat chain configfile echo exfat ext2 f2fs fat font gfxmenu gfxterm gzio halt hfsplus iso9660 jpeg keylayouts linux loadenv loopback ls minicmd normal ntfs ntfscomp part_apple part_gpt part_msdos png probe read reboot regexp search search_fs_file search_fs_uuid search_label serial sleep test udf usb usbserial_common usbserial_ftdi usbserial_pl2303 usbserial_usbdebug video xfs zstd biosdisk vbe vga"
+BIOS_MODS="all_video at_keyboard boot btrfs cat chain configfile echo exfat ext2 f2fs fat font gfxmenu gfxterm gzio halt hfsplus iso9660 jpeg keylayouts linux linux16 loadenv loopback ls minicmd normal ntfs ntfscomp part_apple part_gpt part_msdos png probe read reboot regexp search search_fs_file search_fs_uuid search_label serial sleep test udf usb usbserial_common usbserial_ftdi usbserial_pl2303 usbserial_usbdebug video xfs zstd biosdisk vbe vga"
 
 die() { echo "postprocess-bios-grub: ОШИБКА: $*" >&2; exit 1; }
 log() { echo "postprocess-bios-grub: $*"; }
@@ -246,6 +246,30 @@ rm -f "$TREE/EFI/boot.cat" "$TREE/boot/grub/boot.cat"
 [[ -f "$TREE/boot/grub/grub.cfg" ]] || die "после распаковки нет tree/boot/grub/grub.cfg"
 TREE_SIZE_MB="$(du -s --apparent-size -B1M "$TREE" | awk '{print $1}')"
 log "дерево распаковано: ${TREE_SIZE_MB} МиБ"
+
+# --- 3a. Memtest86+ для BIOS-меню (EndeavourOS-стиль, 11.11.2026) -------------
+# mkarchiso 92 копирует memtest.bin в ISO только для bootmode syslinux
+# (функция _make_boot_on_iso9660, строка ~544); при uefi.grub файл
+# в ISO не попадает, хотя пакет memtest86+ установлен и
+# work/x86_64/boot/memtest86+/memtest.bin существует (boot_dir).
+# Пункт меню «Run Memtest86+ (RAM test)» в grub.cfg защищён
+# search --file, но без самого файла он бесполезен — кладём его
+# в дерево ISO здесь (та же логика, что у mkarchiso: имя memtest
+# без .bin, + LICENSE GPL-2.0-only). Нефатально: если исходника
+# нет (work/ очищен), меню просто останется без файла.
+log "== 3a. Memtest86+ (BIOS) =="
+MEMTEST_SRC="/xros/work/x86_64/boot/memtest86+/memtest.bin"
+if [[ -f "$MEMTEST_SRC" ]]; then
+    install -d -m 0755 -- "$TREE/boot/memtest86+/"
+    install -m 0644 -- "$MEMTEST_SRC" "$TREE/boot/memtest86+/memtest"
+    MEMTEST_LICENSE="/xros/work/x86_64/airootfs/usr/share/licenses/spdx/GPL-2.0-only.txt"
+    if [[ -f "$MEMTEST_LICENSE" ]]; then
+        install -m 0644 -- "$MEMTEST_LICENSE" "$TREE/boot/memtest86+/LICENSE"
+    fi
+    log "memtest86+: /boot/memtest86+/memtest добавлен ($(stat -c%s "$TREE/boot/memtest86+/memtest") Б)"
+else
+    log "ПРЕДУПРЕЖДЕНИЕ: $MEMTEST_SRC не найден — пункт Memtest86+ в BIOS-меню останется без файла (search-страж в grub.cfg)"
+fi
 
 # --- 4. генерация BIOS GRUB-образа -------------------------------------------
 log "== 4. Генерация eltorito.img (GRUB 2.16, i386-pc-eltorito) =="

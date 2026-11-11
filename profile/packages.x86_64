@@ -9,6 +9,9 @@ base
 bash-completion
 dialog
 grub
+# memtest86+ (11.11.2026, меню в стиле EndeavourOS): тест RAM из BIOS-меню.
+# mkarchiso сам кладёт /boot/memtest86+/memtest.bin на ISO как /boot/memtest86+/memtest.
+memtest86+
 intel-ucode
 less
 linux
@@ -17,6 +20,10 @@ mkinitcpio
 mkinitcpio-archiso
 nano
 sudo
+# which (fixed10, D9): де-факто стандарт для shell-скриптов.
+# hostname (inetutils) сознательно НЕ ставится: ничего в системе его
+# не вызывает, интерфейс — hostnamectl.
+which
 # Диски и загрузка
 # (syslinux здесь НЕТ: загрузчик XrOS — только GRUB,
 #  BIOS i386-pc и UEFI x86_64-efi; syslinux удалён из списка.)
@@ -69,6 +76,7 @@ noto-fonts
 xorg-server
 # Приветствие и установщик
 python-pyqt6
+qt6-declarative
 libxkbcommon-x11
 # Безопасность
 ufw

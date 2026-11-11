@@ -16,3 +16,9 @@ __pycache__/
 *.pyc
 # Локальные бэкапы ISO/rootfs (вне git, только в ~/workspace/xros-backups)
 *.qcow2
+# build-staging: копия Diamond в packages/ пересоздаётся шагом 5 build.sh
+packages/xros-installer/xros-installer-diamond/
+# tools-debs/: .deb для восстановления хоста после перезагрузок (не исходники проекта)
+tools-debs/
+# website/: сайт XrOS — отдельный артефакт, ведётся в side-chat
+website/

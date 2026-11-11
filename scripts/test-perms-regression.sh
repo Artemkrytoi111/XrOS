@@ -31,7 +31,14 @@ mkdir -p "$SCRATCH/rootfs/tmp" "$SCRATCH/rootfs/root" "$SCRATCH/rootfs/var/log"
 # ВНИМАНИЕ: mkdir в setgid-каталоге хоста с umask 0007 даёт новым
 # каталогам 2770 (тот самый дефект 10.11.2026!) — ставим режимы явно,
 # иначе чистая копия не будет чистой.
+# fixed10: бэкап live-rootfs — от fixed9, его /usr и /etc = 2755
+# (дефект). Тестовая «чистая» копия нормализуется к ожидаемому
+# состоянию 755 — иначе Тест 1 ложно упадёт на новом строгом чекере.
 chmod 755 "$SCRATCH/rootfs" "$SCRATCH/rootfs/var" "$SCRATCH/rootfs/var/log"
+chmod 755 "$SCRATCH/rootfs/usr" "$SCRATCH/rootfs/etc" 2>/dev/null || true
+# В бэкапе live-rootfs 696 каталогов с setgid (дефект fixed9) — снимаем
+# спецбиты с каталогов публичных путей, как это делает сборка (шаг 11б).
+find "$SCRATCH/rootfs/usr" "$SCRATCH/rootfs/etc" "$SCRATCH/rootfs/home" -type d -perm /6000 -exec chmod a-s {} + 2>/dev/null || true
 chmod 1777 "$SCRATCH/rootfs/tmp"; chmod 750 "$SCRATCH/rootfs/root"
 # Сентинел: режим реального rootfs до и после теста (доказательство, что он не тронут).
 SENTINEL_MODE_BEFORE="$(stat -c %a "$ROOT/work/x86_64/airootfs/usr" 2>/dev/null || echo NA)"
@@ -60,6 +67,16 @@ cp -a "$SCRATCH/rootfs" "$SCRATCH/case5"
 chmod 0700 "$SCRATCH/case5/usr"
 "$CHECK" "$SCRATCH/case5" >/dev/null 2>&1; result "/usr 0700 обнаружен" 1 $?
 
+echo "=== Тест 5б: /usr 2755 (дефект fixed9) — чекер должен FAIL ==="
+cp -a "$SCRATCH/rootfs" "$SCRATCH/case5b"
+chmod 2755 "$SCRATCH/case5b/usr"
+"$CHECK" "$SCRATCH/case5b" >/dev/null 2>&1; result "/usr 2755 обнаружен" 1 $?
+
+echo "=== Тест 5в: каталог с setgid в /usr/share — чекер должен FAIL ==="
+cp -a "$SCRATCH/rootfs" "$SCRATCH/case5c"
+mkdir -p "$SCRATCH/case5c/usr/share/testdir"; chmod 2755 "$SCRATCH/case5c/usr/share/testdir"
+"$CHECK" "$SCRATCH/case5c" >/dev/null 2>&1; result "setgid-каталог в /usr обнаружен" 1 $?
+
 echo "=== Тест 6: файл 777 — чекер должен FAIL ==="
 cp -a "$SCRATCH/rootfs" "$SCRATCH/case6"
 touch "$SCRATCH/case6/etc/test-open.sh"; chmod 777 "$SCRATCH/case6/etc/test-open.sh"
@@ -73,8 +90,16 @@ if [[ "$SENTINEL_MODE_BEFORE" == "$SENTINEL_MODE_AFTER" && "$SENTINEL_LIVE_BEFOR
 else
   echo "FAIL: рабочий rootfs ИЗМЕНЁН (было $SENTINEL_MODE_BEFORE/$SENTINEL_LIVE_BEFORE, стало $SENTINEL_MODE_AFTER/$SENTINEL_LIVE_AFTER)"; FAIL_N=$((FAIL_N+1))
 fi
-# И сам чекер на рабочем rootfs по-прежнему PASS.
-"$CHECK" "$ROOT/work/x86_64/airootfs" >/dev/null 2>&1; result "рабочий rootfs по-прежнему PASS" 0 $?
+# И сам чекер на рабочем rootfs: результат должен СООТВЕТСТВОВАТЬ его режиму
+# (2755 → FAIL, 755 → PASS). Рабочий rootfs — от fixed9 (2755), поэтому
+# сейчас ожидается FAIL; после сборки fixed10 с чистыми правами — PASS.
+WORK_MODE="$(stat -c %a "$ROOT/work/x86_64/airootfs/usr" 2>/dev/null || echo NA)"
+"$CHECK" "$ROOT/work/x86_64/airootfs" >/dev/null 2>&1; WORK_RC=$?
+if [[ "$WORK_MODE" == "755" && "$WORK_RC" == "0" ]] || [[ "$WORK_MODE" == "2755" && "$WORK_RC" == "1" ]]; then
+  echo "PASS: чекер на рабочем rootfs согласуется с его режимом (/usr=$WORK_MODE, код $WORK_RC)"; PASS_N=$((PASS_N+1))
+else
+  echo "FAIL: чекер на рабочем rootfs НЕ согласуется с режимом (/usr=$WORK_MODE, код $WORK_RC)"; FAIL_N=$((FAIL_N+1))
+fi
 
 [[ "$KEEP" -eq 0 ]] && rm -rf "$SCRATCH"
 echo "=== ИТОГ: PASS=$PASS_N FAIL=$FAIL_N ==="

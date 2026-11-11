@@ -34,7 +34,20 @@ from PyQt6.QtWidgets import (
 
 LOGO = "/usr/share/xros/xros-logo.png"
 AUTOSTART = os.path.expanduser("~/.config/autostart/xros-welcome.desktop")
-INSTALLER = "/usr/local/bin/xros-install-gui"
+# Diamond — основной установщик (QML); Rust GUI — запасной, если
+# Diamond по какой-то причине отсутствует в системе.
+INSTALLER_CANDIDATES = ("/usr/local/bin/xros-installer-diamond",
+                        "/usr/local/bin/xros-install-gui")
+
+
+def _pick_installer():
+    for path in INSTALLER_CANDIDATES:
+        if os.path.exists(path):
+            return path
+    return INSTALLER_CANDIDATES[0]
+
+
+INSTALLER = _pick_installer()
 
 ACCENT = "#8b00ff"
 ACCENT_LIGHT = "#b66aff"

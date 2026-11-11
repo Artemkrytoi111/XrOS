@@ -14,18 +14,22 @@
 
 pkgname=xros-installer
 pkgver=1.0
-pkgrel=3
-pkgdesc="Установщик XrOS: консольный и графический"
+pkgrel=6
+pkgdesc="Установщик XrOS: консольный, графический Diamond (QML) и запасной Rust GUI"
 arch=('x86_64')
 url="https://xros.example"
 license=('custom:XrOS')
 depends=('bash' 'dialog' 'rsync' 'parted' 'dosfstools' 'e2fsprogs' 'btrfs-progs'
          'xfsprogs' 'gptfdisk' 'grub' 'efibootmgr' 'os-prober' 'libxkbcommon-x11'
+         'python-pyqt6' 'qt6-declarative'
          'xros-branding')
 options=('!debug')
 source=('xros-install'
         'xros-install-gui')
 sha256sums=('SKIP' 'SKIP')
+# Diamond (каталог, НЕ в source=): makepkg не умеет каталог как источник
+# («not found in the build directory») — staged-каталог лежит рядом
+# с PKGBUILD, prepare()/package() обращаются к нему через $startdir.
 
 prepare() {
   # Консольный установщик: staged-копия обязана совпадать с src/.
@@ -38,9 +42,34 @@ prepare() {
     error "xros-install-gui старше исходников src/xros-install-gui-rs: пересоберите бинарь (cargo build --release --offline)"
     exit 1
   fi
+  # Diamond: staged-копия обязана совпадать с src/xros-installer-diamond.
+  if ! diff -r --exclude=__pycache__ --exclude=README.md \
+       "$startdir/../../src/xros-installer-diamond" "$startdir/xros-installer-diamond" >/dev/null; then
+    error "xros-installer-diamond отличается от src/xros-installer-diamond: обновите staged-копию (см. scripts/build.sh, этап 5)"
+    exit 1
+  fi
 }
 
 package() {
   install -Dm755 xros-install "$pkgdir/usr/local/bin/xros-install"
   install -Dm755 xros-install-gui "$pkgdir/usr/local/bin/xros-install-gui"
+  # Diamond (QML): лаунчер + приложение (каталог рядом с PKGBUILD).
+  # Файлы ставятся по одному явным install с буквальным $pkgdir:
+  # диагностика (19) сверяет список файлов пакета с package() по тексту,
+  # а cp -r дерева qml и переменные-сокращения она перечислить не может.
+  install -Dm755 "$startdir/xros-installer-diamond/xros-installer-diamond" "$pkgdir/usr/local/bin/xros-installer-diamond"
+  install -Dm644 "$startdir/xros-installer-diamond/main.py" "$pkgdir/usr/local/lib/xros-installer-diamond/main.py"
+  install -Dm644 "$startdir/xros-installer-diamond/bridge.py" "$pkgdir/usr/local/lib/xros-installer-diamond/bridge.py"
+  install -Dm644 "$startdir/xros-installer-diamond/qml/Main.qml" "$pkgdir/usr/local/lib/xros-installer-diamond/qml/Main.qml"
+  install -Dm644 "$startdir/xros-installer-diamond/qml/Theme.qml" "$pkgdir/usr/local/lib/xros-installer-diamond/qml/Theme.qml"
+  install -Dm644 "$startdir/xros-installer-diamond/qml/strings.js" "$pkgdir/usr/local/lib/xros-installer-diamond/qml/strings.js"
+  install -Dm644 "$startdir/xros-installer-diamond/qml/qmldir" "$pkgdir/usr/local/lib/xros-installer-diamond/qml/qmldir"
+  install -Dm644 "$startdir/xros-installer-diamond/qml/screens/Welcome.qml" "$pkgdir/usr/local/lib/xros-installer-diamond/qml/screens/Welcome.qml"
+  install -Dm644 "$startdir/xros-installer-diamond/qml/screens/Region.qml" "$pkgdir/usr/local/lib/xros-installer-diamond/qml/screens/Region.qml"
+  install -Dm644 "$startdir/xros-installer-diamond/qml/screens/Keyboard.qml" "$pkgdir/usr/local/lib/xros-installer-diamond/qml/screens/Keyboard.qml"
+  install -Dm644 "$startdir/xros-installer-diamond/qml/screens/Disk.qml" "$pkgdir/usr/local/lib/xros-installer-diamond/qml/screens/Disk.qml"
+  install -Dm644 "$startdir/xros-installer-diamond/qml/screens/User.qml" "$pkgdir/usr/local/lib/xros-installer-diamond/qml/screens/User.qml"
+  install -Dm644 "$startdir/xros-installer-diamond/qml/screens/Summary.qml" "$pkgdir/usr/local/lib/xros-installer-diamond/qml/screens/Summary.qml"
+  install -Dm644 "$startdir/xros-installer-diamond/qml/screens/Install.qml" "$pkgdir/usr/local/lib/xros-installer-diamond/qml/screens/Install.qml"
+  install -Dm644 "$startdir/xros-installer-diamond/qml/screens/Finish.qml" "$pkgdir/usr/local/lib/xros-installer-diamond/qml/screens/Finish.qml"
 }

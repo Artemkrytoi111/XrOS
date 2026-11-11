@@ -42,6 +42,7 @@ file_permissions=(
   ["/usr/local/bin/Installation_guide"]="0:0:755"
   ["/usr/local/bin/xros-install"]="0:0:755"
   ["/usr/local/bin/xros-install-gui"]="0:0:755"
+  ["/usr/local/bin/xros-installer-diamond"]="0:0:755"
   ["/usr/local/bin/xros"]="0:0:755"
   ["/usr/local/bin/xros-welcome"]="0:0:755"
   ["/usr/local/bin/xros-welcome-gui"]="0:0:755"

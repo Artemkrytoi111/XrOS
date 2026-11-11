@@ -172,3 +172,9 @@ fi
 # Права на установщики (перестраховка: profiledef.sh тоже их задаёт).
 chown root:root /usr/local/bin/xros-install /usr/local/bin/xros-welcome /usr/local/bin/xros-welcome-gui 2>/dev/null || true
 chmod 755 /usr/local/bin/xros-install /usr/local/bin/xros-welcome /usr/local/bin/xros-welcome-gui 2>/dev/null || true
+
+# Корень живой системы — 0755 (fixed10, Этап 2): mkarchiso копирует профиль
+# в work/airootfs, и корень там оказывался 555 — в squashfs и, через rsync,
+# в установленной системе. Скрипт выполняется в chroot от root до упаковки
+# squashfs, поэтому / здесь — корень живой системы. Только корень, без рекурсии.
+chmod 755 / || true

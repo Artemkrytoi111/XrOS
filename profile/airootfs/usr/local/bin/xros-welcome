@@ -11,7 +11,7 @@ while true; do
     3 "Показать информацию о системе" \
     4 "Выключить компьютер" 2>&1 >/dev/tty)
   case "${CHOICE:-}" in
-    1) sudo /usr/local/bin/xros-install-gui ;;
+    1) if [[ -x /usr/local/bin/xros-installer-diamond ]]; then sudo /usr/local/bin/xros-installer-diamond; else sudo /usr/local/bin/xros-install-gui; fi ;;
     2) clear; echo "XrOS 1.0 — для выхода наберите exit"; bash --login ;;
     3) clear; /usr/local/bin/xros 2>/dev/null || cat /usr/share/xros/banner.txt; echo; read -rp "Enter — назад" _ ;;
     4) poweroff ;;
