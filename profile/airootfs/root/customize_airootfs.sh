@@ -154,18 +154,17 @@ ln -sf /usr/lib/os-release /etc/os-release
 sed -i 's|^root:\(.*\):/usr/bin/zsh$|root:\1:/bin/bash|' /etc/passwd || true
 sed -i 's|^root:x:0:0:root:/root:.*$|root:x:0:0:root:/root:/bin/bash|' /etc/passwd
 
-# Репозиторий XrOS (см. profile/pacman.conf): основной сервер пока
-# не опубликован — работает снимок внутри системы. GPG-подпись — позже.
+# Репозиторий XrOS (см. profile/pacman.conf): основной сервер —
+# GitHub Pages (XrOS-Security-Updates). GPG-подпись — позже.
 if ! grep -q '^\[xros\]' /etc/pacman.conf 2>/dev/null; then
   cat >> /etc/pacman.conf <<'REPO_EOF'
 
 # XrOS: собственный репозиторий пакетов проекта.
-# PLACEHOLDER: основной сервер https://xros.example/repo не существует
-# (домен xros.example — заглушка, публикации нет);
+# Основной сервер — GitHub Pages (XrOS-Security-Updates);
 # запасной — снимок репозитория внутри системы.
 [xros]
 SigLevel = Optional TrustAll
-Server = https://xros.example/repo/$repo/os/$arch
+Server = https://artemkrytoi111.github.io/XrOS-Security-Updates/xros/os/$arch
 Server = file:///usr/share/xros/repo/$repo/os/$arch
 REPO_EOF
 fi
