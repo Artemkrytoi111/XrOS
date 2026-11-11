@@ -178,17 +178,18 @@ if grep -qiE "menuentry.*UEFI Shell" profile/grub/grub.cfg; then
 else
   ok "grub.cfg: пункта UEFI Shell нет (намеренно отсутствует)"
 fi
-# 7з. Меню GRUB (дефект 10.11.2026, fixed3/fixed6): @TIMEOUT@ GRUB
-# подставляет ТОЛЬКО в progress_bar с id "__timeout__" (в label — никогда;
-# доказано установленной системой: fixed5-label показывал литерал).
-# Поэтому: @TIMEOUT@ — только в progress_bar, ни в одном label его нет;
-# id "__timeout__" ровно один; пункт меню не длиннее ~30 символов, иначе
-# pixmap выделения (50% ширины) обрезает текст («с экранным диктором
-# (speaking)» обрезался до «(s», fixed3).
-if awk '/\+ progress_bar \{/{f=1} f&&/^\}/{f=0} f&&/@TIMEOUT@/{bad=1} END{exit bad?0:1}' profile/grub/theme/theme.txt; then
-  ok "theme.txt: @TIMEOUT@ в progress_bar (GRUB подставит число)"
+# 7з. Меню GRUB (дефект 10.11.2026, fixed3/fixed6, исправлено fixed8):
+# @TIMEOUT@ GRUB 2.16 НЕ подставляет вообще (доказано: fixed7 показал
+# литерал; strings gfxmenu.mod — только @TIMEOUT_NOTIFICATION_LONG@ /
+# _MIDDLE@ / _SHORT@, SHORT — "%ds"). Поэтому countdown — только
+# @TIMEOUT_NOTIFICATION_SHORT@ в progress_bar с id "__timeout__"
+# (в label — никогда); id "__timeout__" ровно один; пункт меню не
+# длиннее ~30 символов, иначе pixmap выделения (50% ширины) обрезает
+# текст («с экранным диктором (speaking)» обрезался до «(s», fixed3).
+if awk '/\+ progress_bar \{/{f=1} f&&/^\}/{f=0} f&&/@TIMEOUT_NOTIFICATION_SHORT@/{short=1} f&&/@TIMEOUT@/{bad=1} END{exit (short && !bad)?0:1}' profile/grub/theme/theme.txt; then
+  ok "theme.txt: countdown в progress_bar через @TIMEOUT_NOTIFICATION_SHORT@ (GRUB 2.16 подставляет %ds)"
 else
-  bad "theme.txt: нет @TIMEOUT@ в progress_bar (обратный отсчёт не покажется)"
+  bad "theme.txt: в progress_bar нет @TIMEOUT_NOTIFICATION_SHORT@ или есть литерал @TIMEOUT@"
 fi
 if awk '/\+ label \{/{f=1} f&&/^\}/{f=0} f&&/@TIMEOUT@/{bad=1} END{exit bad?0:1}' profile/grub/theme/theme.txt; then
   bad "theme.txt: @TIMEOUT@ в label (GRUB не подставляет, будет литерал)"
@@ -424,12 +425,16 @@ fi
 # в fixed7 меню показало литерал. Доказано strings gfxmenu.mod
 # (GRUB 2.16): есть только @TIMEOUT_NOTIFICATION_LONG@/_MIDDLE@/_SHORT@
 # (SHORT — "%ds"). Обе темы (ISO и Live/установленная) обязаны быть
-# без литерала @TIMEOUT@, с SHORT-плейсхолдером и идентичны друг другу.
-if ! grep -q '@TIMEOUT@' profile/grub/theme/theme.txt \
-   && ! grep -q '@TIMEOUT@' profile/airootfs/usr/share/xros/grub-theme/theme.txt \
-   && grep -q '@TIMEOUT_NOTIFICATION_SHORT@' profile/grub/theme/theme.txt \
-   && grep -q '@TIMEOUT_NOTIFICATION_SHORT@' profile/airootfs/usr/share/xros/grub-theme/theme.txt \
-   && cmp -s profile/grub/theme/theme.txt profile/airootfs/usr/share/xros/grub-theme/theme.txt; then
+# без литерала @TIMEOUT@ в строках text = (в комментариях @TIMEOUT@
+# упоминается — это не литерал для GRUB), с SHORT-плейсхолдером
+# и идентичны друг другу.
+THEME_ISO="profile/grub/theme/theme.txt"
+THEME_LIVE="profile/airootfs/usr/share/xros/grub-theme/theme.txt"
+if ! grep '^  text = ' "$THEME_ISO" | grep -q '@TIMEOUT@' \
+   && ! grep '^  text = ' "$THEME_LIVE" | grep -q '@TIMEOUT@' \
+   && grep -q '@TIMEOUT_NOTIFICATION_SHORT@' "$THEME_ISO" \
+   && grep -q '@TIMEOUT_NOTIFICATION_SHORT@' "$THEME_LIVE" \
+   && cmp -s "$THEME_ISO" "$THEME_LIVE"; then
   ok "тема GRUB: без литерала @TIMEOUT@, countdown через @TIMEOUT_NOTIFICATION_SHORT@, ISO == Live"
 else
   bad "тема GRUB: есть литерал @TIMEOUT@, нет SHORT-плейсхолдера или темы ISO/Live расходятся"
