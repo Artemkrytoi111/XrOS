@@ -14,7 +14,7 @@
 
 pkgname=xros-installer
 pkgver=1.0
-pkgrel=2
+pkgrel=3
 pkgdesc="Установщик XrOS: консольный и графический"
 arch=('x86_64')
 url="https://xros.example"
