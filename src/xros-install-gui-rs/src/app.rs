@@ -135,6 +135,10 @@ pub struct App {
     // (InstallHandle::cancel ставит флаг cancelled): Finished(false)
     // после этого — не ошибка, а штатная остановка.
     pub confirm_cancel: bool,
+    // Фокус уже запрошен для открытого диалога (fixed7): при открытии
+    // диалога фокус клавиатуры ставится на его главную кнопку, иначе
+    // Tab циклит виджеты главного окна и до кнопок диалога не доходит.
+    pub dialog_focus: bool,
     pub logo_small: Option<(TextureHandle, egui::Vec2)>,
     pub logo_big: Option<(TextureHandle, egui::Vec2)>,
 }
@@ -206,6 +210,7 @@ impl App {
             rx: None,
             child: None,
             confirm_cancel: false,
+            dialog_focus: false,
             logo_small,
             logo_big,
         };
@@ -546,6 +551,13 @@ impl eframe::App for App {
             });
         });
 
+        // фокус диалога (fixed7): пока никакой диалог не открыт —
+        // сбрасываем, чтобы при следующем открытии фокус снова встал
+        // на главную кнопку диалога
+        if !self.confirm_erase && !self.confirm_cancel && self.error_msg.is_none() {
+            self.dialog_focus = false;
+        }
+
         // подтверждение стирания диска
         if self.confirm_erase {
             let disk = self.sel.disk.clone();
@@ -554,20 +566,27 @@ impl eframe::App for App {
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
+                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        self.confirm_erase = false;
+                    }
                     ui.label(format!(
                         "Точно стереть диск\n\n  {disk}\n\nи установить туда XrOS?\nВсе файлы на диске будут удалены безвозвратно."
                     ));
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new("Да, стереть").strong().color(Color32::WHITE),
-                                )
-                                .fill(theme::ACCENT),
+                        let erase_btn = ui.add(
+                            egui::Button::new(
+                                RichText::new("Да, стереть").strong().color(Color32::WHITE),
                             )
-                            .clicked()
-                        {
+                            .fill(theme::ACCENT),
+                        );
+                        // fixed7: фокус — на главную кнопку сразу при
+                        // открытии диалога (иначе Tab циклит главное окно)
+                        if !self.dialog_focus {
+                            erase_btn.request_focus();
+                            self.dialog_focus = true;
+                        }
+                        if erase_btn.clicked() {
                             self.confirm_erase = false;
                             self.advance();
                         }
@@ -585,20 +604,26 @@ impl eframe::App for App {
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
+                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        self.confirm_cancel = false;
+                    }
                     ui.label(
                         "Остановить установку?\n\nДвижок будет остановлен, целевой диск размонтирован.\nРазметка диска может оказаться незавершённой —\nустановку придётся повторить с начала.",
                     );
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new("Да, остановить").strong().color(Color32::WHITE),
-                                )
-                                .fill(theme::ACCENT),
+                        let stop_btn = ui.add(
+                            egui::Button::new(
+                                RichText::new("Да, остановить").strong().color(Color32::WHITE),
                             )
-                            .clicked()
-                        {
+                            .fill(theme::ACCENT),
+                        );
+                        // fixed7: фокус — на главную кнопку при открытии
+                        if !self.dialog_focus {
+                            stop_btn.request_focus();
+                            self.dialog_focus = true;
+                        }
+                        if stop_btn.clicked() {
                             self.confirm_cancel = false;
                             self.cancel_install();
                         }
@@ -615,9 +640,18 @@ impl eframe::App for App {
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
+                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        self.error_msg = None;
+                    }
                     ui.label(&msg);
                     ui.add_space(8.0);
-                    if ui.button("Закрыть").clicked() {
+                    let close_btn = ui.button("Закрыть");
+                    // fixed7: фокус — на кнопку при открытии диалога
+                    if !self.dialog_focus {
+                        close_btn.request_focus();
+                        self.dialog_focus = true;
+                    }
+                    if close_btn.clicked() {
                         self.error_msg = None;
                     }
                 });

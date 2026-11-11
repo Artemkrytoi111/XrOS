@@ -386,6 +386,15 @@ if cmp -s packages/xros-installer/xros-install-gui profile/airootfs/usr/local/bi
 else
   bad "xros-install-gui расходится (пакет != airootfs)"
 fi
+# fixed7 (11.11.2026): фокус клавиатуры в диалогах установщика —
+# при открытии диалога фокус ставится на главную кнопку (request_focus),
+# иначе Tab циклит виджеты главного окна и до кнопок диалога не доходит
+# (INSTALLER-VALIDATION.md: подтверждение стирания — FAIL).
+if grep -q 'request_focus' src/xros-install-gui-rs/src/app.rs && [[ packages/xros-installer/xros-install-gui -nt src/xros-install-gui-rs/src/app.rs ]]; then
+  ok "xros-install-gui: фокус диалога (request_focus), бинарь свежее исходников"
+else
+  bad "xros-install-gui: нет request_focus в app.rs или бинарь старше исходников"
+fi
 if cmp -s packages/xros-branding/banner.txt profile/airootfs/usr/share/xros/banner.txt; then
   ok "banner.txt синхронен (пакет == airootfs)"
 else
