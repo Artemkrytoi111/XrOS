@@ -178,18 +178,19 @@ if grep -qiE "menuentry.*UEFI Shell" profile/grub/grub.cfg; then
 else
   ok "grub.cfg: пункта UEFI Shell нет (намеренно отсутствует)"
 fi
-# 7з. Меню GRUB (дефект 10.11.2026, fixed3/fixed6, исправлено fixed8):
-# @TIMEOUT@ GRUB 2.16 НЕ подставляет вообще (доказано: fixed7 показал
-# литерал; strings gfxmenu.mod — только @TIMEOUT_NOTIFICATION_LONG@ /
-# _MIDDLE@ / _SHORT@, SHORT — "%ds"). Поэтому countdown — только
-# @TIMEOUT_NOTIFICATION_SHORT@ в progress_bar с id "__timeout__"
-# (в label — никогда); id "__timeout__" ровно один; пункт меню не
-# длиннее ~30 символов, иначе pixmap выделения (50% ширины) обрезает
-# текст («с экранным диктором (speaking)» обрезался до «(s», fixed3).
-if awk '/\+ progress_bar \{/{f=1} f&&/^\}/{f=0} f&&/@TIMEOUT_NOTIFICATION_SHORT@/{short=1} f&&/@TIMEOUT@/{bad=1} END{exit (short && !bad)?0:1}' profile/grub/theme/theme.txt; then
-  ok "theme.txt: countdown в progress_bar через @TIMEOUT_NOTIFICATION_SHORT@ (GRUB 2.16 подставляет %ds)"
+# 7з. Меню GRUB (дефект 10.11.2026, fixed3/fixed6, исправлено fixed9):
+# @TIMEOUT@ GRUB 2.16 НЕ подставляет вообще, а @TIMEOUT_NOTIFICATION_*@
+# — только как ВСЁ значение text (точное grub_strcmp, не подстрока;
+# доказано fixed7/fixed8 + исходником gui_progress_bar.c). Поэтому
+# countdown — printf-шаблон с %d в progress_bar с id "__timeout__"
+# (draw_text делает xasprintf(template, |value|); в label — никогда);
+# id "__timeout__" ровно один; пункт меню не длиннее ~30 символов, иначе
+# pixmap выделения (50% ширины) обрезает текст («с экранным диктором
+# (speaking)» обрезался до «(s», fixed3).
+if awk '/\+ progress_bar \{/{f=1} f&&/^\}/{f=0} f&&/text = .*%d/{has=1} f&&/text = .*@/{bad=1} END{exit (has && !bad)?0:1}' profile/grub/theme/theme.txt; then
+  ok "theme.txt: countdown в progress_bar — printf-шаблон с %d (GRUB подставляет секунды)"
 else
-  bad "theme.txt: в progress_bar нет @TIMEOUT_NOTIFICATION_SHORT@ или есть литерал @TIMEOUT@"
+  bad "theme.txt: в progress_bar нет text с %d или есть литерал @...@"
 fi
 if awk '/\+ label \{/{f=1} f&&/^\}/{f=0} f&&/@TIMEOUT@/{bad=1} END{exit bad?0:1}' profile/grub/theme/theme.txt; then
   bad "theme.txt: @TIMEOUT@ в label (GRUB не подставляет, будет литерал)"
@@ -421,23 +422,23 @@ if grep -q 'xros-wait-kactivitymanagerd"\]="0:0:755"' profile/profiledef.sh; the
 else
   bad "xros-wait-kactivitymanagerd НЕТ в file_permissions — в ISO будет 644, ExecStartPre не запустится"
 fi
-# fixed8 (11.11.2026): GRUB НЕ подставляет @TIMEOUT@ вообще —
-# в fixed7 меню показало литерал. Доказано strings gfxmenu.mod
-# (GRUB 2.16): есть только @TIMEOUT_NOTIFICATION_LONG@/_MIDDLE@/_SHORT@
-# (SHORT — "%ds"). Обе темы (ISO и Live/установленная) обязаны быть
-# без литерала @TIMEOUT@ в строках text = (в комментариях @TIMEOUT@
-# упоминается — это не литерал для GRUB), с SHORT-плейсхолдером
-# и идентичны друг другу.
+# fixed9 (11.11.2026): GRUB НЕ подставляет @TIMEOUT@ вообще, а
+# @TIMEOUT_NOTIFICATION_*@ — только как ВСЁ значение text (точное
+# grub_strcmp; fixed7 и fixed8 показали литералы). Правильный
+# countdown — printf-шаблон с %d (gui_progress_bar.c: draw_text
+# делает xasprintf(template, |value|)). Обе темы (ISO и
+# Live/установленная) обязаны иметь %d в строке text, без @,
+# и быть идентичны друг другу.
 THEME_ISO="profile/grub/theme/theme.txt"
 THEME_LIVE="profile/airootfs/usr/share/xros/grub-theme/theme.txt"
-if ! grep '^  text = ' "$THEME_ISO" | grep -q '@TIMEOUT@' \
-   && ! grep '^  text = ' "$THEME_LIVE" | grep -q '@TIMEOUT@' \
-   && grep -q '@TIMEOUT_NOTIFICATION_SHORT@' "$THEME_ISO" \
-   && grep -q '@TIMEOUT_NOTIFICATION_SHORT@' "$THEME_LIVE" \
+if grep '^  text = ' "$THEME_ISO" | grep -q '%d' \
+   && grep '^  text = ' "$THEME_LIVE" | grep -q '%d' \
+   && ! grep '^  text = ' "$THEME_ISO" | grep -q '@' \
+   && ! grep '^  text = ' "$THEME_LIVE" | grep -q '@' \
    && cmp -s "$THEME_ISO" "$THEME_LIVE"; then
-  ok "тема GRUB: без литерала @TIMEOUT@, countdown через @TIMEOUT_NOTIFICATION_SHORT@, ISO == Live"
+  ok "тема GRUB: countdown через %d-шаблон, без литералов @...@, ISO == Live"
 else
-  bad "тема GRUB: есть литерал @TIMEOUT@, нет SHORT-плейсхолдера или темы ISO/Live расходятся"
+  bad "тема GRUB: нет %d в text, есть литерал @...@ или темы ISO/Live расходятся"
 fi
 if cmp -s packages/xros-branding/banner.txt profile/airootfs/usr/share/xros/banner.txt; then
   ok "banner.txt синхронен (пакет == airootfs)"

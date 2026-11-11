@@ -47,7 +47,7 @@ terminal-box: "terminal_box_*.png"
   top = 84%
   width = 50%
   height = 20
-  text = "Автозагрузка через @TIMEOUT_NOTIFICATION_SHORT@"
+  text = "Автозагрузка через %d с"
   font = "DejaVu Sans 12"
   text_color = "#f5f3fa"
   fg_color = "#8b00ff"
@@ -66,5 +66,13 @@ terminal-box: "terminal_box_*.png"
 # strings gfxmenu.mod (GRUB 2.16) содержит только __timeout__ и
 # @TIMEOUT_NOTIFICATION_LONG@ / _MIDDLE@ / _SHORT@ (замены:
 # LONG — "The highlighted entry will be executed automatically in %ds.",
-# MIDDLE — "%ds remaining.", SHORT — "%ds"). Поэтому здесь SHORT:
-# "Автозагрузка через 7s".
+# MIDDLE — "%ds remaining.", SHORT — "%ds").
+# 11.11.2026 (fixed9): ОШИБКА fixed8: SHORT тоже показался литералом.
+# Точный механизм — исходник GRUB gui_progress_bar.c,
+# progress_bar_set_property(): плейсхолдеры сравниваются через
+# grub_strcmp СО ВСЕМ значением text (точное совпадение), а не как
+# подстрока. Поэтому "Автозагрузка через @TIMEOUT_NOTIFICATION_SHORT@"
+# не подставляется. Правильно: text — это printf-шаблон, draw_text()
+# делает grub_xasprintf(template, |value|) — %d заменяется на секунды
+# до автозагрузки. text = "Автозагрузка через %d с" рендерится
+# "Автозагрузка через 7 с".
