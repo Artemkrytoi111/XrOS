@@ -20,7 +20,7 @@ import sys
 if os.geteuid() != 0:
     os.execvp("sudo", ["sudo", sys.executable, os.path.abspath(__file__), *sys.argv[1:]])
 
-from PyQt6.QtCore import QUrl
+from PyQt6.QtCore import QUrl, QTimer
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtQml import QQmlApplicationEngine
 
@@ -44,6 +44,18 @@ def main() -> int:
     if not engine.rootObjects():
         print("ОШИБКА: не удалось загрузить QML", file=sys.stderr)
         return 1
+
+    # D14 (12.11.2026): принудительная активация окна и захват фокуса.
+    # В UEFI Live клавиатура не доходила до QML (печать/Tab/Enter игнорировались).
+    # После загрузки просим активацию корневого окна.
+    def activate_window():
+        roots = engine.rootObjects()
+        if roots:
+            win = roots[0]
+            win.requestActivate()
+            win.raise_()
+    QTimer.singleShot(300, activate_window)
+
     return app.exec()
 
 
