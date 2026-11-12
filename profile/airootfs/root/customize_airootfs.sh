@@ -155,7 +155,7 @@ sed -i 's|^root:\(.*\):/usr/bin/zsh$|root:\1:/bin/bash|' /etc/passwd || true
 sed -i 's|^root:x:0:0:root:/root:.*$|root:x:0:0:root:/root:/bin/bash|' /etc/passwd
 
 # Репозиторий XrOS (см. profile/pacman.conf): основной сервер —
-# GitHub Pages (XrOS-Security-Updates). GPG-подпись — позже.
+# GitHub Pages (XrOS-Security-Updates).
 if ! grep -q '^\[xros\]' /etc/pacman.conf 2>/dev/null; then
   cat >> /etc/pacman.conf <<'REPO_EOF'
 
@@ -163,10 +163,18 @@ if ! grep -q '^\[xros\]' /etc/pacman.conf 2>/dev/null; then
 # Основной сервер — GitHub Pages (XrOS-Security-Updates);
 # запасной — снимок репозитория внутри системы.
 [xros]
-SigLevel = Optional TrustAll
+SigLevel = Required
 Server = https://artemkrytoi111.github.io/XrOS-Security-Updates/xros/os/$arch
 Server = file:///usr/share/xros/repo/$repo/os/$arch
 REPO_EOF
+fi
+
+# D10 (12.11.2026): импорт публичного ключа XrOS в keyring живой системы.
+# Ключ лежит в XrOS-Security-Updates/xros-public.key.
+# Без этого SigLevel=Required не сработает.
+if [[ -f /usr/share/xros/xros-public.key ]]; then
+  pacman-key --add /usr/share/xros/xros-public.key || true
+  pacman-key --lsign-key 0EC935D2A8E31AEC1878BBE5797805A298A55BAA || true
 fi
 
 # Права на установщики (перестраховка: profiledef.sh тоже их задаёт).
