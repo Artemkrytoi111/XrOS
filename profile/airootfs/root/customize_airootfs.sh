@@ -34,7 +34,11 @@ systemd-sysusers || true
 # SDDM, сессия plasma. Прежняя причина держать X11 (чёрный экран
 # Wayland в QEMU/bochs-drm) относилась к Plasma 6.4 и требует
 # повторной проверки в QEMU перед сборкой.
-systemctl enable sddm.service || true
+# A-10: sddm — БЕЗ '|| true': если enable не удался, сборка должна
+# упасть громко (иначе ISO с чёрным экраном без лога). Для
+# NetworkManager/ufw '|| true' оставлено осознанно: их enable
+# не критичен для загрузки графической сессии.
+systemctl enable sddm.service
 mkdir -p /etc/sddm.conf.d
 cat > /etc/sddm.conf.d/autologin.conf <<'SDDM_EOF'
 [Autologin]
@@ -162,20 +166,74 @@ if ! grep -q '^\[xros\]' /etc/pacman.conf 2>/dev/null; then
 # XrOS: собственный репозиторий пакетов проекта.
 # Основной сервер — GitHub Pages (XrOS-Security-Updates);
 # запасной — снимок репозитория внутри системы.
+# A-04: SigLevel = Optional ВРЕМЕННО (пакеты не подписаны, см.
+# profile/pacman.conf); после подписания вернуть Required.
 [xros]
-SigLevel = Required
+SigLevel = Optional
 Server = https://artemkrytoi111.github.io/XrOS-Security-Updates/xros/os/$arch
 Server = file:///usr/share/xros/repo/$repo/os/$arch
 REPO_EOF
 fi
 
-# D10 (12.11.2026): импорт публичного ключа XrOS в keyring живой системы.
-# Ключ лежит в XrOS-Security-Updates/xros-public.key.
-# Без этого SigLevel=Required не сработает.
-if [[ -f /usr/share/xros/xros-public.key ]]; then
-  pacman-key --add /usr/share/xros/xros-public.key || true
-  pacman-key --lsign-key 0EC935D2A8E31AEC1878BBE5797805A298A55BAA || true
+# D10/A-40: импорт production публичного ключа XrOS в keyring живой системы.
+# Источник истины — /usr/share/xros/xros-gpg.conf (XROS_GPG_PROD_FPR).
+# Пока FPR пуст — production GPG не настроен: dev-режим, явное
+# предупреждение, импорт пропускается (SigLevel=Optional, см. A-04).
+# Когда FPR задан — строгий путь: проверка ключа, --init, --add,
+# проверка отпечатка, --lsign-key, проверка наличия в keyring.
+# Любая ошибка — падение customize (явные проверки + exit 1), а не
+# || true: молча пропущенная ошибка импорта делала бы Required
+# неработоспособным. Тестовый ключ 0EC935D2… здесь не используется.
+if [[ -f /usr/share/xros/xros-gpg.conf ]]; then
+  # shellcheck disable=SC1091
+  . /usr/share/xros/xros-gpg.conf
+else
+  XROS_GPG_PROD_FPR=""
 fi
+if [[ -z "${XROS_GPG_PROD_FPR:-}" ]]; then
+  echo "ПРЕДУПРЕЖДЕНИЕ: production GPG не настроен (XROS_GPG_PROD_FPR пуст) — dev-режим, ключ XrOS не импортирован, SigLevel=Optional (A-40)" >&2
+else
+  KEY_FILE=/usr/share/xros/xros-public.key
+  [[ -f "$KEY_FILE" ]] || { echo "ОШИБКА: production GPG: нет $KEY_FILE при заданном XROS_GPG_PROD_FPR=$XROS_GPG_PROD_FPR" >&2; exit 1; }
+  /usr/local/bin/xros-gpg-check "$KEY_FILE" "$XROS_GPG_PROD_FPR" || exit 1
+  pacman-key --init || { echo "ОШИБКА: pacman-key --init не удался (A-40)" >&2; exit 1; }
+  pacman-key --add "$KEY_FILE" || { echo "ОШИБКА: pacman-key --add $KEY_FILE не удался (A-40)" >&2; exit 1; }
+  # Проверка фактического импорта: отпечаток обязан быть в keyring.
+  pacman-key --finger "$XROS_GPG_PROD_FPR" 2>/dev/null | tr -d '[:space:]' | grep -qi "${XROS_GPG_PROD_FPR// /}" \
+    || { echo "ОШИБКА: отпечаток $XROS_GPG_PROD_FPR не найден в keyring после --add (A-40)" >&2; exit 1; }
+  pacman-key --lsign-key "$XROS_GPG_PROD_FPR" || { echo "ОШИБКА: pacman-key --lsign-key $XROS_GPG_PROD_FPR не удался (A-40)" >&2; exit 1; }
+  pacman-key --list-keys "$XROS_GPG_PROD_FPR" >/dev/null 2>&1 \
+    || { echo "ОШИБКА: ключ $XROS_GPG_PROD_FPR не найден в keyring после --lsign-key (A-40)" >&2; exit 1; }
+  echo "GPG: production-ключ $XROS_GPG_PROD_FPR импортирован и подписан локально (A-40)"
+fi
+
+# Зеркала pacman (1.1, пункт 1): /etc/pacman.d/mirrorlist обязан быть
+# непустым — иначе живая система не синхронизирует базы
+# («failed to synchronize all databases / no servers configured»).
+# Профиль кладёт готовый mirrorlist в airootfs; здесь — страховка на
+# случай, если файл потерялся или пуст (например, его перезаписал
+# пакет pacman-mirrorlist при pacstrap): восстанавливаем из
+# встроенной копии. Падение сборки здесь лучше, чем ISO без зеркал.
+# Boot-сервис не нужен: файл лежит в squashfs (только чтение) и
+# попасть в живую систему пустым после этой проверки не может.
+if ! grep -q '^Server' /etc/pacman.d/mirrorlist 2>/dev/null; then
+  echo "ПРЕДУПРЕЖДЕНИЕ: /etc/pacman.d/mirrorlist пуст или отсутствует — восстанавливаю зеркала XrOS" >&2
+  mkdir -p /etc/pacman.d
+  cat > /etc/pacman.d/mirrorlist <<'MIRROR_EOF'
+##
+## XrOS — зеркала pacman для живой системы (1.1, пункт 1).
+## Проверены на Arch VM (14.11.2026): dotsrc и osbeck — самые быстрые,
+## metalgamer — запасное. Порядок = приоритет.
+##
+
+Server = https://mirrors.dotsrc.org/archlinux/$repo/os/$arch
+Server = https://mirror.osbeck.com/archlinux/$repo/os/$arch
+Server = https://mirror.metalgamer.eu/archlinux/$repo/os/$arch
+MIRROR_EOF
+fi
+grep -q '^Server' /etc/pacman.d/mirrorlist \
+  || { echo "ОШИБКА: /etc/pacman.d/mirrorlist пуст после восстановления — зеркала не настроены" >&2; exit 1; }
+chmod 644 /etc/pacman.d/mirrorlist
 
 # Права на установщики (перестраховка: profiledef.sh тоже их задаёт).
 chown root:root /usr/local/bin/xros-install /usr/local/bin/xros-welcome /usr/local/bin/xros-welcome-gui 2>/dev/null || true

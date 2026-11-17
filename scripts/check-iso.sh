@@ -16,7 +16,14 @@
 #
 # Использование:
 #   ./scripts/check-iso.sh <iso> [--label XROS_202611] [--archiso]
-#                           [--no-media-check]
+#                           [--no-media-check] [--require-sha256]
+#   --require-sha256 — обязательный режим (для build.sh): отсутствие
+#     SHA256SUMS или записи для ISO — FAIL, а не SKIP.
+# R-11 (ограничение, документирован): SHA256SUMS, созданная на шаге 12
+# build.sh, доказывает отсутствие изменений файла ПОСЛЕ хеширования,
+# но сама по себе НЕ доказывает корректность содержимого ISO (состав
+# пакетов, загрузчик, профиль). A-39 проверяет целостность файла,
+# а не внутреннюю корректность образа.
 # Выход: 0 — все обязательные проверки PASS; 1 — есть FAIL.
 # Каждая проверка печатает одну строку PASS/FAIL/SKIP + итог.
 set -u
@@ -25,12 +32,14 @@ ISO=""
 LABEL="XROS_202611"
 EXPECT_ARCHISO=0
 MEDIA_CHECK=1
+REQUIRE_SHA256=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --label) LABEL="${2:-}"; [[ -n "$LABEL" ]] || { echo "check-iso: --label требует значения" >&2; exit 2; }; shift 2 ;;
         --label=*) LABEL="${1#--label=}"; shift ;;
         --archiso) EXPECT_ARCHISO=1; shift ;;
         --no-media-check) MEDIA_CHECK=0; shift ;;
+        --require-sha256) REQUIRE_SHA256=1; shift ;;
         --help|-h)
             sed -n '2,20p' "$0"; exit 0 ;;
         -*)
@@ -55,9 +64,72 @@ skip() { SKIP=$((SKIP+1)); echo "SKIP  $1${2:+ — $2}"; }
 
 echo "check-iso: $ISO"
 SIZE="$(stat -c%s "$ISO")"
-check "iso-exists-size" 0 "${SIZE} Б"
+# A-16/A-39: размер обязан быть > 0, а хеш сверяется с out/SHA256SUMS.
+# Правила (A-39): совпадение — PASS; несовпадение, невалидный хеш,
+# дубли записи, повреждённый или нечитаемый файл — FAIL; отсутствие
+# файла или записи — SKIP в необязательном режиме и FAIL в обязательном
+# (--require-sha256, так вызывает build.sh). Отсутствие проверки
+# никогда не обозначается как PASS (прежний код давал PASS, когда
+# сверки не было вовсе — строки 80/87 старой версии).
+if [[ "$SIZE" -gt 0 ]]; then
+    check "iso-exists-size" 0 "${SIZE} Б"
+else
+    check "iso-exists-size" 1 "размер ISO = 0"
+fi
 SHA="$(sha256sum "$ISO" | awk '{print $1}')"
-check "iso-sha256" 0 "$SHA"
+SUMS_FILE="$(dirname "$ISO")/SHA256SUMS"
+if [[ ! "$SHA" =~ ^[0-9a-f]{64}$ ]]; then
+    check "iso-sha256" 1 "не удалось посчитать sha256"
+elif [[ ! -e "$SUMS_FILE" ]]; then
+    if [[ "$REQUIRE_SHA256" -eq 1 ]]; then
+        check "iso-sha256" 1 "нет SHA256SUMS рядом (обязательный режим сборки)"
+    else
+        skip "iso-sha256" "нет SHA256SUMS рядом — сверка не выполнялась"
+    fi
+elif [[ ! -f "$SUMS_FILE" ]]; then
+    check "iso-sha256" 1 "SHA256SUMS существует, но это не обычный файл"
+elif [[ ! -r "$SUMS_FILE" ]]; then
+    check "iso-sha256" 1 "SHA256SUMS невозможно прочитать"
+else
+    # Строгий разбор: каждая непустая строка — "<64 hex> [ *]<имя>"
+    # (формат вывода sha256sum; CRLF допустим — \r отрезается; имена
+    # с пробелами — как есть). Дубли записи для этого ISO, невалидный
+    # хеш и мусорные строки — FAIL. Первый попавшийся хеш через
+    # head -1 НЕ берётся: совпадений обязано быть ровно одно.
+    BASE="$(basename "$ISO")"
+    MATCHES=0; WANT=""; CORRUPT=""
+    while IFS= read -r _line || [[ -n "$_line" ]]; do
+        _line="${_line%$'\r'}"
+        _line="${_line#\\}"
+        [[ -z "${_line//[[:space:]]/}" ]] && continue
+        if [[ "$_line" =~ ^([0-9a-fA-F]{64})[[:space:]][[:space:]]?(\*?)(.+)$ ]]; then
+            _h="${BASH_REMATCH[1],,}"; _name="${BASH_REMATCH[3]}"
+            if [[ "$_name" == "$BASE" ]]; then
+                MATCHES=$((MATCHES+1)); WANT="$_h"
+            fi
+        else
+            CORRUPT="$_line"
+            break
+        fi
+    done < "$SUMS_FILE"
+    if [[ -n "$CORRUPT" ]]; then
+        check "iso-sha256" 1 "SHA256SUMS повреждён: строка не соответствует формату: ${CORRUPT:0:80}"
+    elif [[ "$MATCHES" -eq 0 ]]; then
+        if [[ "$REQUIRE_SHA256" -eq 1 ]]; then
+            check "iso-sha256" 1 "в SHA256SUMS нет записи для $BASE (обязательный режим сборки)"
+        else
+            skip "iso-sha256" "в SHA256SUMS нет записи для $BASE — сверка не выполнялась"
+        fi
+    elif [[ "$MATCHES" -gt 1 ]]; then
+        check "iso-sha256" 1 "в SHA256SUMS $MATCHES записей для $BASE (дубли — неоднозначно)"
+    elif [[ ! "$WANT" =~ ^[0-9a-f]{64}$ ]]; then
+        check "iso-sha256" 1 "в SHA256SUMS невалидный хеш для $BASE: $WANT"
+    elif [[ "$SHA" == "$WANT" ]]; then
+        check "iso-sha256" 0 "$SHA (совпадает с SHA256SUMS)"
+    else
+        check "iso-sha256" 1 "не совпадает с SHA256SUMS: файл $SHA, в SHA256SUMS $WANT"
+    fi
+fi
 
 VOLID="$(xorriso -indev "$ISO" -pvd_info 2>/dev/null | sed -n 's/^Volume Id *: //p' | head -1)"
 if [[ "$VOLID" == "$LABEL" ]]; then check "volid" 0 "$VOLID";

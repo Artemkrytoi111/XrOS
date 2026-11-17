@@ -37,12 +37,27 @@ Item {
             return ["Very weak", "Weak", "Fair", "Good", "Strong", "Very strong"][s]
         return ["Очень слабый", "Слабый", "Средний", "Хороший", "Сильный", "Очень сильный"][s]
     }
+    function usernameError() {
+        if (username === "") return ""
+        // A-31: зарезервированное системное имя (проверка в bridge).
+        var err = bridge.checkUsername(username)
+        if (err !== "") return err
+        if (!/^[a-z_][a-z0-9_]*$/.test(username) || username.length < 2)
+            return installer.uiLang === "en" ? "Only lowercase latin letters, digits and _" : "Только латиница в нижнем регистре, цифры и _"
+        return ""
+    }
     function usernameOk() {
-        return /^[a-z_][a-z0-9_]*$/.test(username) && username.length >= 2
+        return username !== "" && usernameError() === ""
     }
     function validate() {
-        var rootOk = !separateRoot || (rootPass1.length >= 4 && rootPass1 === rootPass2)
-        return usernameOk() && pass1.length >= 4 && pass1 === pass2 &&
+        // П.3 (XrOS 1.1): минимум пароля A-26 (8 символов) снят по
+        // решению владельца — короткий пароль РАЗРЕШЁН, единообразно
+        // с Rust GUI. Пустой пароль и несовпадение паролей
+        // по-прежнему блокируют «Далее». Предупреждение о слабости
+        // короткого пароля показывается рядом с полем (янтарный
+        // Theme.warning) и НЕ блокирует переход.
+        var rootOk = !separateRoot || (rootPass1.length > 0 && rootPass1 === rootPass2)
+        return usernameOk() && pass1.length > 0 && pass1 === pass2 &&
                hostname.length > 0 && rootOk
     }
 
@@ -52,8 +67,9 @@ Item {
         installer.settings["USERPASS"] = pass1
         // Отдельный пароль root — только если включён и заполнен верно;
         // иначе root = пароль пользователя (поведение fixed9 сохранено).
+        // П.3 (XrOS 1.1): короткий пароль root тоже разрешён (как в Rust GUI).
         installer.settings["ROOTPASS"] =
-            (separateRoot && rootPass1.length >= 4 && rootPass1 === rootPass2) ? rootPass1 : pass1
+            (separateRoot && rootPass1.length > 0 && rootPass1 === rootPass2) ? rootPass1 : pass1
         installer.settings["HOSTNAME"] = hostname
         installer.settings["AUTOLOGIN"] = autologin ? "1" : "0"
     }
@@ -104,9 +120,7 @@ Item {
                     }
                 }
                 Text {
-                    text: username !== "" && !usernameOk()
-                          ? (installer.uiLang === "en" ? "Only lowercase latin letters, digits and _" : "Только латиница в нижнем регистре, цифры и _")
-                          : " "
+                    text: usernameError() === "" ? " " : usernameError()
                     color: Theme.danger; font.pixelSize: 12
                 }
             }
@@ -197,6 +211,17 @@ Item {
                         color: Theme.textSecondary; font.pixelSize: 12
                     }
                 }
+                Text {
+                    // П.3 (XrOS 1.1): короткий пароль разрешён — только
+                    // честное предупреждение (янтарный), не блокирует «Далее».
+                    // Текст — как в Rust GUI (steps.rs show_users).
+                    Layout.preferredWidth: 340
+                    wrapMode: Text.WordWrap
+                    text: pass1 !== "" && pass1.length < 8
+                          ? (installer.uiLang === "en" ? "⚠ Short password is unreliable: it is easy to guess. A password of 8+ characters is recommended." : "⚠ Короткий пароль ненадёжен: его легко подобрать. Рекомендуется пароль от 8 символов.")
+                          : " "
+                    color: Theme.warning; font.pixelSize: 12
+                }
             }
             // Подтверждение пароля.
             ColumnLayout {
@@ -258,11 +283,16 @@ Item {
                         border { color: parent.activeFocus ? Theme.accent : Theme.border; width: 1 }
                     }
                 }
-                Text { text: " "; color: Theme.danger; font.pixelSize: 12 }
-            }
-            ColumnLayout {
-                spacing: 6
-                Text { text: installer.uiLang === "en" ? "Confirm root password" : "Подтвердите пароль root"; color: Theme.text; font.pixelSize: 14 }
+                Text {
+                    // П.3 (XrOS 1.1): короткий пароль root разрешён — только
+                    // честное предупреждение (янтарный), не блокирует «Далее».
+                    Layout.preferredWidth: 340
+                    wrapMode: Text.WordWrap
+                    text: rootPass1 !== "" && rootPass1.length < 8
+                          ? (installer.uiLang === "en" ? "⚠ Short administrator password is unreliable: it is easy to guess. A password of 8+ characters is recommended." : "⚠ Короткий пароль администратора ненадёжен: его легко подобрать. Рекомендуется пароль от 8 символов.")
+                          : " "
+                    color: Theme.warning; font.pixelSize: 12
+                }
                 TextField {
                     Layout.preferredWidth: 340; Layout.preferredHeight: 44
                     echoMode: showPass ? TextInput.Normal : TextInput.Password

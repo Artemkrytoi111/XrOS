@@ -136,8 +136,8 @@ if echo "$NB" | grep -q 'systemctl enable'; then
 else
   ok "DE=none: ветка none не содержит systemctl enable"
 fi
-check "DE=none: все DM отключаются (sddm/lightdm/gdm)" \
-  "echo \"\$NB\" | grep -q 'systemctl disable sddm.service' && echo \"\$NB\" | grep -q 'systemctl disable lightdm.service' && echo \"\$NB\" | grep -q 'systemctl disable gdm.service'"
+check "DE=none: все DM отключаются (цикл sddm/lightdm/gdm + xros_disable_dm, P4-AUD-02)" \
+  "echo \"\$NB\" | grep -q 'for dm in sddm lightdm gdm; do' && echo \"\$NB\" | grep -q 'xros_disable_dm \"\$dm.service\"'"
 check "DE=none: цель по умолчанию — multi-user.target" \
   "echo \"\$NB\" | grep -q 'systemctl set-default multi-user.target'"
 check "DE=none: автовход не ставится (требует DE_DM, у none он пуст)" \
@@ -155,6 +155,33 @@ if [[ -n "${OFFICE_GUARD_LINE:-}" && -n "${OFFICE_LINE:-}" && "$OFFICE_GUARD_LIN
 else
   bad "DE=none: нет защиты от установки офиса в блоке офиса"
 fi
+
+# ---------- (д) FIX-B (V-09): default target fail-closed + финальная проверка ----------
+# P4-AUD-04: set-default multi-user.target без || true; независимая
+# проверка default target для DE=none в финальном блоке.
+# Проверяем по уникальным строкам helper xros_verify_default_target
+# (сообщения об ошибках — только в нём).
+if grep -q 'systemctl set-default multi-user.target.*|| true' "$ENGINE"; then
+  bad "FIX-B: 'set-default multi-user.target || true' всё ещё в движке (V-09 не исправлен)"
+else
+  ok "FIX-B: 'set-default multi-user.target || true' убрано (V-09)"
+fi
+check "FIX-B: set-default multi-user.target — fail-closed (ошибка + exit 1)" \
+  "grep -q 'не удалось установить multi-user.target как цель по умолчанию' \"\$ENGINE\" && grep -A1 'systemctl set-default multi-user.target' \"\$ENGINE\" | grep -q 'exit 1'"
+check "FIX-B: helper xros_verify_default_target существует" \
+  "grep -q '^xros_verify_default_target() {' \"\$ENGINE\""
+check "FIX-B: финальная проверка default target вызывается для DE=none" \
+  "grep -q 'xros_verify_default_target \"multi-user.target\"' \"\$ENGINE\""
+check "FIX-B: проверка default target — симлинк обязателен" \
+  "grep -q 'default target не задан' \"\$ENGINE\""
+check "FIX-B: проверка default target — точное имя цели" \
+  "grep -q 'default target указывает на' \"\$ENGINE\""
+check "FIX-B: проверка default target — цель существует (не висячий)" \
+  "grep -q 'default target висячий' \"\$ENGINE\""
+check "FIX-B: проверка default target — маска /dev/null отклоняется" \
+  "grep -q 'default target.*замаскирован' \"\$ENGINE\""
+check "FIX-B: проверка default target — секция [Unit] обязательна" \
+  "grep -q 'default target.*повреждён' \"\$ENGINE\""
 
 # ---------- KDE: полный состав, без xorg-server ----------
 KDE_PKGS=$(case_line kde | sed -E 's/.*DE_PKGS="([^"]*)".*/\1/')

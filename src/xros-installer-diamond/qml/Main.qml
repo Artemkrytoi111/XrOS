@@ -20,10 +20,10 @@ ApplicationWindow {
     property string uiLang: "ru"
     property int currentStep: 0
     property var settings: ({
-        "PARTMODE": "erase", "FS": "ext4", "TIMEZONE": "Europe/Samara",
+        "PARTMODE": "erase", "FS": "ext4", "TIMEZONE": "Europe/Astrakhan",
         "KEYMAP": "ru", "AUTOLOGIN": "0", "OFFICE": "none", "DE": "kde",
         "FULLNAME": "", "USERNAME": "", "USERPASS": "", "ROOTPASS": "",
-        "DISK": "", "ROOT_PART": "", "HOSTNAME": "xros-os"
+        "DISK": "", "ROOT_PART": "", "EFI_PART": "", "HOSTNAME": "xros-os"
     })
     property var completedSteps: []
 

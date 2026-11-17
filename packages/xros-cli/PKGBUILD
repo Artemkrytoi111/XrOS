@@ -21,13 +21,17 @@
 
 pkgname=xros-cli
 pkgver=1.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Команда xros: информация о системе и обновление"
 arch=('x86_64')
 url="https://xros.example"
 license=('custom:XrOS')
 depends=('glibc' 'xros-branding')
-options=('!debug')
+options=('!debug' '!strip')
+# RECOVERY-01 Phase E (13.11.2026): '!strip' — makepkg по умолчанию
+# strip-ит ELF-бинари, и CLI в пакете получался stripped (64120ea3…,
+# 395 792 B) вместо официального unstripped (9c67cfdc…, 516 720 B).
+# Та же проблема, что у GUI в R-09/R-10 (там исправлено в R-10).
 source=('xros'
         'xros-update.service'
         'xros-update.timer')

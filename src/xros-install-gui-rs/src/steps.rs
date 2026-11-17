@@ -265,6 +265,17 @@ fn show_users(app: &mut App, ui: &mut egui::Ui) {
         );
     });
 
+    // П.3 (XrOS 1.1): короткий пароль разрешён, но честно предупреждаем
+    // о слабости. Это только предупреждение — переход «Далее» не блокируется.
+    if !app.sel.userpass.is_empty() && app.sel.userpass.len() < 8 {
+        ui.label(
+            RichText::new("⚠ Короткий пароль ненадёжен: его легко подобрать. Рекомендуется пароль от 8 символов.")
+                .color(Color32::from_rgb(0xf2, 0xb8, 0x40))
+                .size(13.0),
+        );
+        ui.add_space(6.0);
+    }
+
     ui.add_space(6.0);
     ui.checkbox(
         &mut app.sel.same_admin_pass,
@@ -281,6 +292,15 @@ fn show_users(app: &mut App, ui: &mut egui::Ui) {
                     .desired_width(w),
             );
         });
+        // П.3 (XrOS 1.1): то же предупреждение — для пароля администратора.
+        if !app.sel.rootpass.is_empty() && app.sel.rootpass.len() < 8 {
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("⚠ Короткий пароль администратора ненадёжен: его легко подобрать. Рекомендуется пароль от 8 символов.")
+                    .color(Color32::from_rgb(0xf2, 0xb8, 0x40))
+                    .size(13.0),
+            );
+        }
     }
     ui.add_space(6.0);
     ui.checkbox(

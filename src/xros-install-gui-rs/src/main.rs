@@ -37,15 +37,38 @@ fn main() {
             // через оконный менеджер не срабатывали. Развёрнутое окно
             // всегда полностью видно, на любом разрешении.
             .with_maximized(true),
+        // П.6 (XrOS 1.1): vsync ВЫКЛЮЧЕН, аппаратное ускорение —
+        // Preferred (по умолчанию, зафиксировано явно).
+        // Причина: в живой системе под VirtualBox видеодрайвер
+        // vmwgfx сломан (ошибки DRM при загрузке), рендер идёт
+        // через программный llvmpipe. Со включённым vsync каждый
+        // кадр дополнительно ждёт vblank/present у композитора,
+        // и цикл обработки событий тормозится: нажатия клавиш
+        // копились между редкими кадрами и визуально «терялись»
+        // при быстром вводе. Без vsync swap_buffers возвращается
+        // сразу, цикл крутит события так быстро, как позволяет CPU,
+        // и ввод доходит до полей без многосекундных задержек.
+        // Тиринг в окне установщика неважен. На железе с рабочим
+        // GPU ускорение по-прежнему используется (Preferred).
+        vsync: false,
+        hardware_acceleration: eframe::HardwareAcceleration::Preferred,
         ..Default::default()
     };
-    // для отладки: --step N открывает сразу шаг N
+    // для отладки: --step N открывает сразу шаг N.
+    // A-11: только в debug-сборке. В релизе флаг игнорируется:
+    // пропуск шагов мимо валидации в релизном установщике недопустим.
+    #[cfg(debug_assertions)]
     let mut start_step = 0;
-    let mut args = std::env::args().skip(1);
-    while let Some(a) = args.next() {
-        if a == "--step" {
-            if let Some(n) = args.next().and_then(|s| s.parse::<usize>().ok()) {
-                start_step = n;
+    #[cfg(not(debug_assertions))]
+    let start_step = 0;
+    #[cfg(debug_assertions)]
+    {
+        let mut args = std::env::args().skip(1);
+        while let Some(a) = args.next() {
+            if a == "--step" {
+                if let Some(n) = args.next().and_then(|s| s.parse::<usize>().ok()) {
+                    start_step = n;
+                }
             }
         }
     }

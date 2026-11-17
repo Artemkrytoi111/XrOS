@@ -23,7 +23,7 @@ depends=('bash' 'dialog' 'rsync' 'parted' 'dosfstools' 'e2fsprogs' 'btrfs-progs'
          'xfsprogs' 'gptfdisk' 'grub' 'efibootmgr' 'os-prober' 'libxkbcommon-x11'
          'python-pyqt6' 'qt6-declarative'
          'xros-branding')
-options=('!debug')
+options=('!debug' '!strip')
 source=('xros-install'
         'xros-install-gui')
 sha256sums=('SKIP' 'SKIP')

@@ -1,0 +1,12 @@
+[Unit]
+Description=Автообновление XrOS: обновления безопасности [xros] и системы
+After=network-online.target
+Wants=network-online.target
+# Второй слой защиты от живой системы (первый — в самом скрипте):
+# в живой системе /run/archiso/bootmnt всегда существует, юнит
+# пропускается (condition не выполнено), ничего не обновляется.
+ConditionPathExists=!/run/archiso/bootmnt
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/xros-auto-update

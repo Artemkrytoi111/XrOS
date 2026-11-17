@@ -1,6 +1,12 @@
 #!/bin/bash
 # check-rootfs-perms.sh — проверка прав rootfs XrOS (регрессионный контроль).
-# Использование: check-rootfs-perms.sh <путь-к-rootfs>
+# Использование: check-rootfs-perms.sh [--profile] <путь-к-rootfs>
+#   без флага — проверка собранного rootfs (work/.../airootfs);
+#   --profile — проверка ИСХОДНОГО профиля (profile/airootfs) как
+#   гейт перед mkarchiso (A-02, вызывается из scripts/build.sh, шаг 9а).
+#   В режиме --profile /tmp НЕ проверяется: в профиле его нет, его
+#   создаёт mkarchiso/systemd при сборке (1777); остальное — те же
+#   требования, что и к собранному rootfs.
 # Возвращает 0, если права в порядке, 1 — при любом нарушении.
 #
 # Дефект 10.11.2026: /usr и /etc (и ещё 32 каталога) имели режим 2770
@@ -25,11 +31,17 @@
 #   (или 2750); /var/cache/ldconfig — 700 (или 2700);
 #   /run, /dev, /sys, /proc — точки монтирования, 555 (или 2555).
 set -u
+PROFILE_MODE=0
+if [[ "${1:-}" == "--profile" ]]; then
+  PROFILE_MODE=1
+  shift
+fi
 ROOTFS="${1:-}"
 if [[ -z "$ROOTFS" || ! -d "$ROOTFS" ]]; then
-  echo "ОШИБКА: укажите существующий каталог rootfs: $0 <путь-к-rootfs>" >&2
+  echo "ОШИБКА: укажите существующий каталог rootfs: $0 [--profile] <путь-к-rootfs>" >&2
   exit 2
 fi
+[[ "$PROFILE_MODE" -eq 1 ]] && echo "Режим --profile: проверка исходного профиля $ROOTFS (/tmp не проверяется — его создаёт сборка)"
 FAIL=0
 fail() { echo "FAIL: $1" >&2; FAIL=1; }
 ok()   { echo "PASS: $1"; }
@@ -90,8 +102,15 @@ else
 fi
 
 # 5. /tmp — 1777/3777 (sticky), /root — 750/2750.
+# В режиме --profile /tmp пропускается: в исходном профиле его нет
+# (нет и каталога profile/airootfs/tmp), его создаёт mkarchiso/systemd
+# при сборке; отсутствие /tmp в профиле — НЕ нарушение.
 for spec in "tmp:1777:3777" "root:750:2750"; do
   d="${spec%%:*}"; rest="${spec#*:}"; m1="${rest%%:*}"; m2="${rest##*:}"
+  if [[ "$PROFILE_MODE" -eq 1 && "$d" == "tmp" ]]; then
+    echo "PASS: /tmp не проверяется в режиме --profile (создаёт сборка)"
+    continue
+  fi
   mode="$(stat -c %a "$ROOTFS/$d" 2>/dev/null || echo MISSING)"
   if [[ "$mode" == "$m1" || "$mode" == "$m2" ]]; then
     ok "/$d режим $mode"

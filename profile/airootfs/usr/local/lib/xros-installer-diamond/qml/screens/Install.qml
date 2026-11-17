@@ -19,8 +19,9 @@ Item {
 
     function validate() { return doneOk }
 
-    Component.onCompleted: {
-        // Запуск движка при входе на экран.
+    // Запуск движка: записать конфиг и стартовать (A-07: та же
+    // функция используется при повторе после неудачи).
+    function startEngine() {
         var settings = installer.settings
         if (!bridge.writeConf(JSON.stringify(settings))) {
             statusText = installer.uiLang === "en"
@@ -40,6 +41,26 @@ Item {
             doneFail = true
             running = false
         }
+    }
+
+    // Повтор после неудачи (A-07): заново записать конфиг и запустить
+    // движок. Сигналы сначала отключаем, чтобы не было двойных
+    // вызовов onLogLine/onInstallFinished (они подключены в startEngine).
+    function retryInstall() {
+        try { bridge.logLine.disconnect(onLogLine) } catch (e) {}
+        try { bridge.installFinished.disconnect(onInstallFinished) } catch (e) {}
+        doneFail = false
+        doneOk = false
+        running = false
+        logModel = []
+        currentOp = ""
+        statusText = ""
+        startEngine()
+    }
+
+    Component.onCompleted: {
+        // Запуск движка при входе на экран.
+        startEngine()
     }
 
     function onLogLine(line) {
@@ -170,6 +191,45 @@ Item {
                 }
             }
         }
+
+        // После неудачи (A-07): повторить или вернуться назад.
+        // Кнопка «Далее» внизу недоступна (validate() требует doneOk),
+        // поэтому эти кнопки — единственный выход с экрана.
+        RowLayout {
+            Layout.fillWidth: true
+            visible: screen.doneFail
+            Item { Layout.fillWidth: true }
+            Button {
+                text: installer.uiLang === "en" ? "Back" : "Назад"
+                onClicked: installer.goBack()
+                Layout.preferredHeight: 44
+                Layout.preferredWidth: 160
+                background: Rectangle {
+                    radius: Theme.radiusSmall
+                    color: parent.hovered ? Theme.card : "transparent"
+                    border { color: Theme.border; width: 1 }
+                }
+                contentItem: Text {
+                    text: parent.text; color: Theme.text
+                    font.pixelSize: 15; horizontalAlignment: Text.AlignHCenter
+                }
+            }
+            Button {
+                text: installer.uiLang === "en" ? "Try again" : "Попробовать снова"
+                onClicked: screen.retryInstall()
+                Layout.preferredHeight: 44
+                Layout.preferredWidth: 200
+                background: Rectangle {
+                    radius: Theme.radiusSmall
+                    color: parent.hovered ? Theme.accent2 : Theme.accent
+                }
+                contentItem: Text {
+                    text: parent.text; color: Theme.text
+                    font { pixelSize: 15; bold: true }
+                    horizontalAlignment: Text.AlignHCenter
+                }
+            }
+        }
     }
 
     Dialog {
@@ -185,9 +245,10 @@ Item {
             padding: 20; leftPadding: 24
         }
         contentItem: Text {
+            // A-19: отмена = переустановка с нуля.
             text: installer.uiLang === "en"
-                  ? "The engine will be stopped. The disk may be left in a partial state."
-                  : "Движок будет остановлен. Диск может остаться в частичном состоянии."
+                  ? "The engine will be stopped. The disk may be left in a partial state, and the installation will have to be started from scratch."
+                  : "Движок будет остановлен. Диск может остаться в частичном состоянии, и установку придётся начинать с нуля."
             color: Theme.textSecondary; font.pixelSize: 15; wrapMode: Text.WordWrap
             padding: 24; topPadding: 0
         }

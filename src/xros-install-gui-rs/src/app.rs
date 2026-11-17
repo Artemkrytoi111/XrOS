@@ -55,6 +55,16 @@ pub const DES: [(&str, &str); 7] = [
     ("Без графики — только консоль", "none"),
 ];
 
+// Зарезервированные системные имена (A-31, тот же список, что
+// в src/xros-install: XROS_RESERVED_USERS и в Diamond bridge.py).
+pub const RESERVED_USERS: [&str; 32] = [
+    "root", "daemon", "bin", "sys", "sync", "games", "man", "lp",
+    "mail", "news", "uucp", "proxy", "www-data", "backup", "list",
+    "irc", "gnats", "nobody", "systemd-network", "systemd-timesync",
+    "systemd-resolve", "messagebus", "polkitd", "sddm", "dbus",
+    "sshd", "avahi", "colord", "rtkit", "git", "http", "ftp",
+];
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PartMode {
     Erase,
@@ -192,15 +202,23 @@ impl App {
         // Finish (шаг 9) напрямую не открываем даже через --step:
         // туда попадают только после реального INSTALL_DONE.
         let start_step = start_step.min(STEPS.len() - 2);
+        // R-03: list_disks возвращает и ошибки проверки дисков —
+        // показываем их в status, а не молчим об исчезнувших дисках.
+        let (initial_disks, disk_errors) = system::list_disks();
+        let initial_status = if disk_errors.is_empty() {
+            "Нажмите «Установить», чтобы начать.".to_string()
+        } else {
+            format!("Ошибка проверки дисков: {}", disk_errors.join("; "))
+        };
         let mut app = Self {
             step: start_step,
             completed: (0..start_step).collect(),
             sel: Choices::default(),
-            disks: system::list_disks(),
+            disks: initial_disks,
             parts: Vec::new(),
             part_hint: String::new(),
             progress: 0.0,
-            status: "Нажмите «Установить», чтобы начать.".into(),
+            status: initial_status,
             log: String::new(),
             installing: false,
             error_msg: None,
@@ -227,7 +245,12 @@ impl App {
         // Если выбранный диск исчез — сбрасываем выбор, чтобы движок
         // не получил мёртвый /dev-путь (его перепроверка идентификатора
         // всё равно поймала бы, но лучше не доводить до ошибки установки).
-        self.disks = system::list_disks();
+        // R-03: ошибки проверки дисков — в status, а не молча.
+        let (disks, disk_errors) = system::list_disks();
+        self.disks = disks;
+        if !disk_errors.is_empty() {
+            self.status = format!("Ошибка проверки дисков: {}", disk_errors.join("; "));
+        }
         if !self.sel.disk.is_empty()
             && !self.disks.iter().any(|(d, _)| *d == self.sel.disk)
         {
@@ -240,7 +263,14 @@ impl App {
             self.part_hint.clear();
             return;
         }
-        self.parts = system::list_partitions(&self.sel.disk);
+        // R-03: list_partitions возвращает и ошибку проверки —
+        // показываем её в part_hint, а не молчаливое «разделов нет».
+        let (parts, parts_error) = system::list_partitions(&self.sel.disk);
+        self.parts = parts;
+        if let Some(err) = parts_error {
+            self.part_hint = err;
+            return;
+        }
         self.part_hint = if system::is_uefi() {
             "Ручная разметка: корневой раздел — клик, EFI-раздел — двойной клик.".into()
         } else {
@@ -262,9 +292,22 @@ impl App {
         if self.sel.username.trim().is_empty() {
             return Err("Введите имя для входа.".into());
         }
+        // A-31: зарезервированное системное имя — до разметки.
+        if RESERVED_USERS.contains(&self.sel.username.trim()) {
+            return Err(format!(
+                "Имя «{}» зарезервировано системой — выберите другое.",
+                self.sel.username.trim()
+            ));
+        }
         if self.sel.userpass.is_empty() {
             return Err("Введите пароль.".into());
         }
+        // П.3 (XrOS 1.1): минимум пароля A-26 (8 символов) снят по
+        // решению владельца — короткий пароль РАЗРЕШЁН. Пустой пароль
+        // и несовпадение паролей по-прежнему блокируют переход.
+        // Предупреждение о слабости короткого пароля показывается
+        // на шаге Users рядом с полем (см. steps.rs show_users)
+        // и НЕ блокирует кнопку «Далее».
         if self.sel.userpass != self.sel.pass2 {
             return Err("Пароли не совпадают.".into());
         }
@@ -396,73 +439,6 @@ impl App {
         }
     }
 
-    fn show_sidebar(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(10.0);
-        if let Some((tex, size)) = &self.logo_small {
-            ui.vertical_centered(|ui| {
-                ui.image((tex.id(), *size));
-            });
-        } else {
-            ui.vertical_centered(|ui| {
-                ui.label(RichText::new("XrOS").size(28.0).strong().color(Color32::WHITE));
-            });
-        }
-        ui.add_space(8.0);
-        ui.vertical_centered(|ui| {
-            ui.label(RichText::new("XrOS 1.0").size(16.0).strong().color(Color32::WHITE));
-        });
-        ui.add_space(6.0);
-        ui.separator();
-        ui.add_space(12.0);
-        for (i, step_name) in STEPS.iter().enumerate() {
-            let done = self.completed.contains(&i);
-            let current = i == self.step;
-            // галочка фиолетовая, название — серое (у текущего шага белое)
-            let mark = if done {
-                "✓  "
-            } else if current {
-                "●  "
-            } else {
-                "     "
-            };
-            let mut job = egui::text::LayoutJob::default();
-            job.append(
-                mark,
-                0.0,
-                egui::TextFormat {
-                    font_id: egui::FontId::proportional(15.0),
-                    color: if done || current {
-                        theme::ACCENT_HOVER
-                    } else {
-                        theme::TEXT_DIM
-                    },
-                    ..Default::default()
-                },
-            );
-            job.append(
-                step_name,
-                0.0,
-                egui::TextFormat {
-                    font_id: egui::FontId::proportional(15.0),
-                    color: if current {
-                        Color32::WHITE
-                    } else {
-                        theme::TEXT_DIM
-                    },
-                    ..Default::default()
-                },
-            );
-            let resp = ui.selectable_label(current, job);
-            if resp.clicked() && (done || current) {
-                self.step = i;
-                if i == 4 {
-                    self.refresh_partitions();
-                }
-            }
-            ui.add_space(3.0);
-        }
-    }
-
     fn show_nav(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -521,14 +497,11 @@ impl eframe::App for App {
             self.status = "Установка идёт — дождитесь её завершения или нажмите «Остановить установку» на шаге Install.".into();
         }
 
-        egui::SidePanel::left("sidebar")
-            .exact_width(210.0)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.style_mut().visuals.panel_fill = theme::SIDEBAR_BG;
-                self.show_sidebar(ui);
-            });
-
+        // П.12 (XrOS 1.1): боковая панель этапов УБРАНА полностью —
+        // нет SidePanel, списка шагов, вертикальной линии, индикаторов
+        // и рамки активного шага. Все 10 шагов и их логика сохранены
+        // (STEPS, advance/on_next/on_back); навигация между шагами —
+        // только кнопками «Далее»/«Назад» внизу.
         egui::TopBottomPanel::bottom("nav").show(ctx, |ui| {
             ui.add_space(6.0);
             self.show_nav(ui, ctx);
@@ -536,16 +509,40 @@ impl eframe::App for App {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            // контент — колонка по центру, не шире 660, чтобы поля
-            // не разъезжались на всю ширину окна
-            let avail = ui.available_size();
-            let col_w = avail.x.min(660.0);
-            let left = ((avail.x - col_w) / 2.0).max(0.0);
+            // шапка: логотип сверху слева (как в макете без панели)
+            ui.add_space(10.0);
             ui.horizontal(|ui| {
-                ui.add_space(left);
+                ui.add_space(22.0);
+                if let Some((tex, size)) = &self.logo_small {
+                    ui.image((tex.id(), *size));
+                } else {
+                    ui.label(
+                        RichText::new("XrOS").size(28.0).strong().color(Color32::WHITE),
+                    );
+                }
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new("XrOS 1.0")
+                            .size(16.0)
+                            .strong()
+                            .color(Color32::WHITE),
+                    );
+                });
+            });
+            ui.add_space(8.0);
+            ui.separator();
+            // контент — слева, на всю ширину панели (не шире 860,
+            // чтобы поля не разъезжались на большом экране);
+            // раньше та же колонка была 660 и центрировалась
+            let avail = ui.available_size();
+            let col_w = (avail.x - 64.0).clamp(200.0, 860.0);
+            ui.horizontal(|ui| {
+                ui.add_space(32.0);
                 ui.vertical(|ui| {
                     ui.set_width(col_w);
-                    ui.add_space(14.0);
+                    ui.add_space(10.0);
                     crate::steps::show_step(self, ui);
                 });
             });
@@ -570,7 +567,7 @@ impl eframe::App for App {
                         self.confirm_erase = false;
                     }
                     ui.label(format!(
-                        "Точно стереть диск\n\n  {disk}\n\nи установить туда XrOS?\nВсе файлы на диске будут удалены безвозвратно."
+                        "Точно стереть диск\n\n  {disk}\n\nи установить туда XrOS?\nВсе файлы на диске будут удалены безвозвратно.\n\nЕсли прервать установку после начала стирания, её придётся начинать с нуля."
                     ));
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {

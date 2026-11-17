@@ -37,15 +37,36 @@
 #      xros-welcome-gui. Пакеты xros-* НЕ входят в
 #      profile/packages.x86_64 — в живую систему они попадают
 #      именно этими копиями (репозиторий нужен для обновлений
-#      после установки).
+#      после установки). В конце шага — сверка хешей пакет→airootfs
+#      (A-37): бинари в живой системе обязаны совпадать с пакетами.
+#   9а. Нормализация прав профиля (A-02): каталоги 755, файлы 644,
+#      исполняемые 755, /root 750 — до mkarchiso; гейт
+#      scripts/check-rootfs-perms.sh --profile.
+#   9б. Снимок репозитория [xros] в build-env rootfs
+#      ($ROOTFS/usr/share/xros/repo/): pacman при pacstrap резолвит
+#      file://-сервер относительно хоста (build-env rootfs), а не
+#      нового корня (см. шаг 4б в build-rootfs-pacstrap.sh).
 #  10. Запуск mkarchiso ВНУТРИ build-env rootfs (штатный archiso 92,
 #      bootmodes=('uefi.grub')): work/ и out/ пересоздаются.
 #  11. Постобработка BIOS-GRUB (scripts/postprocess-bios-grub.sh):
 #      гибридный ISO с суффиксом -hybrid (исходник от mkarchiso
 #      сохраняется).
-#  12. Финальная проверка гибридного ISO (scripts/check-iso.sh
-#      --archiso): оба El Torito, гибридный MBR, структура, SHA256.
-#  13. SHA256SUMS и логи в out/.
+#  12. SHA256SUMS для итоговых ISO (исходный + гибридный) — ДО проверки.
+#  13. Финальная проверка гибридного ISO (scripts/check-iso.sh
+#      --archiso --require-sha256): оба El Torito, гибридный MBR,
+#      структура, SHA256. Отсутствие SHA256SUMS/записи — FAIL.
+#  14. Итог и логи в out/.
+#
+# Режимы:
+#   --confirm — штатная (dev) сборка: GPG не настроен — предупреждение,
+#     SigLevel=Optional, ключ не копируется. Релизный ISO так не собрать.
+#   --release — релизная сборка: сначала жёсткий гейт (release_gate):
+#     FPR задан, публичный ключ проверен, [xros] SigLevel=Required
+#     в обоих pacman.conf, подписи пакетов и БД проверены. Шаги 4/6/7
+#     (сборка Rust, makepkg, repo-add) пропускаются — пересборка
+#     аннулировала бы подписи; вместо этого проверяется свежесть
+#     исходников (ни один файл src//branding/ не новее пакетов).
+#     Подписание — только офлайн у владельца (scripts/sign-repo-offline.sh).
 #
 # Штатный путь — mkarchiso целиком из профиля, БЕЗ ручного pacstrap
 # и БЕЗ маркеров _run_once/base.* (см. ниже про рецепт другого проекта).
@@ -79,6 +100,12 @@
 #     тест (см. AUDIT-REPORT.md §9.7); этот драйвер только строит ISO.
 set -euo pipefail
 
+# umask 022 (A-02): в среде сборки umask 0007 — без этого cp/mkdir
+# дают каталоги 2770 и файлы 660, которые mkarchiso уносит в живую
+# систему (дефект чёрного экрана 10.11.2026). Права профиля
+# дополнительно нормализуются явно перед шагом mkarchiso (шаг 9а).
+umask 022
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROFILE="$ROOT/profile"
 WORK="$ROOT/work"
@@ -94,6 +121,38 @@ STEP=0
 step() { STEP=$((STEP+1)); echo; echo "=== шаг $STEP: $* ==="; }
 die() { echo "build.sh: ОШИБКА: $*" >&2; exit 1; }
 need_cmd() { command -v "$1" >/dev/null 2>&1 || die "нет команды на хосте: $1"; }
+RELEASE=0
+
+# Релизный гейт (A-40): релизный ISO нельзя произвести, пока production
+# GPG не готов полностью. Проверяется ДО любых долгих шагов (--release).
+# Условия: FPR задан и валиден; публичный ключ существует и его
+# отпечаток совпадает (xros-gpg-check); [xros] SigLevel=Required
+# в обоих pacman.conf; подписи всех пакетов и БД проверяются
+# production-ключом (verify-repo-signatures.sh). Любой провал — die.
+release_gate() {
+    echo "Релизный гейт (--release): проверка готовности production GPG..."
+    # shellcheck disable=SC1091
+    . "$PROFILE/airootfs/usr/share/xros/xros-gpg.conf"
+    [[ -n "${XROS_GPG_PROD_FPR:-}" ]] \
+        || die "релизный гейт: production GPG не настроен (XROS_GPG_PROD_FPR пуст) — сначала владелец создаёт ключ офлайн (см. xros-gpg-prod/README.md)"
+    [[ "${XROS_GPG_PROD_FPR}" =~ ^[0-9A-Fa-f]{40}$ ]] \
+        || die "релизный гейт: XROS_GPG_PROD_FPR не 40 hex: ${XROS_GPG_PROD_FPR}"
+    local _key="$ROOT/${XROS_GPG_PROD_KEY:-xros-gpg-prod/xros-public.key}"
+    [[ -f "$_key" ]] || die "релизный гейт: нет файла production-ключа: $_key"
+    "$ROOT/profile/airootfs/usr/local/bin/xros-gpg-check" "$_key" "$XROS_GPG_PROD_FPR" \
+        || die "релизный гейт: публичный ключ не прошёл проверку отпечатка"
+    # R-01: проверка SigLevel — отдельным helper'ом (scripts/check-siglevel-
+    # required.sh): прежний awk находил SigLevel = Required внутри
+    # комментария (profile/pacman.conf:41) и пропускал активный Optional.
+    # Helper требует ровно одну активную директиву SigLevel = Required
+    # в секции [xros] в обоих файлах; комментарии и глобальная секция
+    # не учитываются.
+    "$ROOT/scripts/check-siglevel-required.sh" "$PROFILE/pacman.conf" "$PROFILE/airootfs/etc/pacman.conf" \
+        || die "релизный гейт: в pacman.conf [xros] SigLevel не Required — верните Required только после полного подписания (см. docs/REPO-PUBLISHING.md)"
+    "$ROOT/scripts/verify-repo-signatures.sh" "$ROOT/repo/xros/os/x86_64" "$_key" "$XROS_GPG_PROD_FPR" \
+        || die "релизный гейт: подписи пакетов/БД не прошли проверку (см. вывод выше)"
+    echo "Релизный гейт: production GPG готов (FPR $XROS_GPG_PROD_FPR, подписи проверены)"
+}
 
 usage() {
     sed -n '2,45p' "$0"
@@ -101,6 +160,7 @@ usage() {
     echo "  $0 --help        справка (этот текст)"
     echo "  $0 --dry-run     только печать шагов, ничего не выполняет"
     echo "  $0 --confirm     ПОЛНАЯ сборка ISO (требует root и разрешения Мии)"
+    echo "  $0 --release     РЕЛИЗНАЯ сборка ISO: --confirm + жёсткий GPG-гейт (требует production-ключ, подписи пакетов/БД и SigLevel=Required)"
 }
 
 # --- шаги для --dry-run (только печать, без выполнения) -----------------------
@@ -113,11 +173,14 @@ DRY_STEPS=(
     "Сборка 4 пакетов makepkg в build-env"
     "Обновление локального репозитория repo-add в build-env"
     "Снимок репозитория в profile/airootfs/usr/share/xros/repo/"
-    "Бинари в profile/airootfs/usr/local/bin/ (5 файлов)"
-    "rm -rf work, старые ISO в out/; mkarchiso -v -w work -o out profile (ВНУТРИ rootfs)"
+    "Бинари в profile/airootfs/usr/local/bin/ (5 файлов) + сверка хешей пакет→airootfs (A-37)"
+    "Нормализация прав profile/airootfs + гейт check-rootfs-perms.sh --profile (A-02)"
+    "Снимок репозитория [xros] в build-env rootfs (A-12)"
+    "rm -rf work, старые ISO и устаревший SHA256SUMS в out/ (A-39); mkarchiso -v -w work -o out profile (ВНУТРИ rootfs)"
     "Постобработка BIOS-GRUB -> <имя>-hybrid.iso"
-    "Финальная проверка check-iso.sh --archiso гибридного ISO"
-    "SHA256SUMS и логи в out/"
+    "SHA256SUMS для итоговых ISO (исходный + гибридный) — ДО проверки (A-39)"
+    "Финальная проверка check-iso.sh --archiso --require-sha256 гибридного ISO"
+    "Итог и логи в out/"
 )
 
 MODE="${1:-}"
@@ -131,12 +194,20 @@ case "$MODE" in
         exit 0
         ;;
     --confirm) ;;
+    --release) RELEASE=1 ;;
     *)
-        echo "Это скрипт сборки ISO. Без --confirm ничего не делает."
-        echo "Использование: $0 --confirm | --dry-run | --help"
+        echo "Это скрипт сборки ISO. Без --confirm/--release ничего не делает."
+        echo "Использование: $0 --confirm | --release | --dry-run | --help"
         exit 2
         ;;
 esac
+
+# --- релизный гейт (только --release, до любых проверок окружения) ------------
+# Проверка конфигурации GPG не зависит от build-env/root — поэтому гейт
+# стоит здесь, а не перед шагом 1: ошибка конфигурации видна сразу.
+if [[ "$RELEASE" -eq 1 ]]; then
+    release_gate
+fi
 
 # --- предусловия ---------------------------------------------------------------
 [[ "$(id -u)" -eq 0 ]] || die "сборка требует root (монтирования и chroot в build-env)"
@@ -149,6 +220,14 @@ esac
 need_cmd rsync
 grep -q "bootmodes=('uefi.grub')" "$PROFILE/profiledef.sh" \
     || die "profiledef.sh: bootmodes изменился — ожидалось ('uefi.grub'); syslinux возвращать НЕЛЬЗЯ"
+# mkarchiso выполняется ВНУТРИ build-env rootfs — проверяем его там
+# (пакет archiso ставится в rootfs на --init, A-03), а не на хосте.
+# R-11 RESUME (13.11.2026): --exec не запускает shell, поэтому
+# 'command -v' (shell builtin) падает с 'exec: command: not found'
+# (exit 127) даже при установленном mkarchiso. Проверка идёт через
+# 'bash -c', что сохраняет исходную семантику (поиск в PATH).
+"$BUILD_ENV" --exec -- bash -c 'command -v mkarchiso' >/dev/null 2>&1 \
+    || die "в build-env rootfs нет mkarchiso (пакет archiso): сначала $BUILD_ENV --init"
 mkdir -p "$OUT"
 
 # --- шаг 1: финальная диагностика ---------------------------------------------
@@ -196,8 +275,27 @@ echo "Зеркало профиля: 0 отличий от profile/"
 
 # --- шаг 4: Rust ----------------------------------------------------------------
 step "Сборка Rust --offline в build-env"
-"$BUILD_ENV" --build-rust --offline \
-    || die "сборка Rust --offline не удалась (если кэш пуст — сначала онлайн: $BUILD_ENV --build-rust)"
+if [[ "$RELEASE" -eq 1 ]]; then
+    echo "Релиз: сборка Rust пропущена — используются уже собранные и подписанные пакеты"
+else
+    # RECOVERY-01 Phase C (13.11.2026): изоляция Rust build target.
+    # Отдельный target-каталог target-r11-dev-iso — повреждённый target/
+    # (objcopy-инцидент R-20 E) не используется. No-stage режим: сборка
+    # только проверяет, что код компилируется офлайн; официальные
+    # GUI (cf3cdd2e…, 1.1, 14.11.2026) и CLI (9c67cfdc…) уже восстановлены
+    # из проверенных источников и НЕ перезаписываются. После сборки —
+    # fail-closed SHA-гейты: staging обязан содержать официальные бинари.
+    XROS_CARGO_TARGET_DIR="target-r11-dev-iso" XROS_BUILD_NO_STAGE=1 \
+        "$BUILD_ENV" --build-rust --offline \
+        || die "сборка Rust --offline не удалась (если кэш пуст — сначала онлайн: $BUILD_ENV --build-rust)"
+    GUI_SHA="$(sha256sum "$ROOT/packages/xros-installer/xros-install-gui" | cut -d' ' -f1)"
+    [[ "$GUI_SHA" == "cf3cdd2e729580b318b6e0a6511f5eb700e76395dcf7aa073315de140545cb8c" ]] \
+        || die "RECOVERY-01: GUI в staging изменён после Rust-сборки ($GUI_SHA) — ожидается официальный 1.1 cf3cdd2e…"
+    CLI_SHA="$(sha256sum "$ROOT/packages/xros-cli/xros" | cut -d' ' -f1)"
+    [[ "$CLI_SHA" == "9c67cfdcc1b50998e05be1d0c9efd6d1325473731b8b7de6971ebe049954e1aa" ]] \
+        || die "RECOVERY-01: CLI в staging изменён после Rust-сборки ($CLI_SHA) — ожидается 9c67cfdc…"
+    echo "RECOVERY-01: staging после Rust-сборки — GUI cf3cdd2e… ✓, CLI 9c67cfdc… ✓ (официальные, не перезаписаны)"
+fi
 
 # --- шаг 5: стейджинг исходников в packages/ ------------------------------------
 step "Стейджинг исходников в packages/"
@@ -218,6 +316,22 @@ echo "Стейджинг готов"
 
 # --- шаг 6: пакеты ----------------------------------------------------------------
 step "Сборка 4 пакетов (makepkg в build-env)"
+if [[ "$RELEASE" -eq 1 ]]; then
+    # Релиз: пакеты НЕ пересобираются — пересборка аннулировала бы
+    # офлайн-подписи. Вместо прежней mtime-проверки (R-10: свежий
+    # git clone делал исходники новее пакетов и ронял релиз всегда)
+    # — manifest с хешами исходников, подписанный production-ключом
+    # при офлайн-подписании (sign-repo-offline.sh, шаг 5).
+    # Проверяется: подпись manifest production-ключом и побайтовое
+    # совпадение текущих исходников с manifest. Mtime не используется.
+    # NOTE: это верхнеуровневый код скрипта (не функция) — 'local'
+    # здесь недопустим (bash: ошибка выполнения, которую bash -n
+    # не ловит). Используется обычная переменная.
+    _key="$ROOT/${XROS_GPG_PROD_KEY:-xros-gpg-prod/xros-public.key}"
+    "$ROOT/scripts/verify-sources-manifest.sh" "$ROOT" "$ROOT/repo/xros/os/x86_64" "$_key" "$XROS_GPG_PROD_FPR" \
+        || die "релиз: исходники не соответствуют подписанному manifest — пересоберите с --confirm и подпишите офлайн заново (см. docs/REPO-PUBLISHING.md)"
+    echo "Релиз: пакеты не пересобираются (подписи сохранены), исходники соответствуют подписанному manifest"
+else
 for pkg in xros-cli xros-installer xros-welcome xros-branding; do
     "$BUILD_ENV" --makepkg "packages/$pkg" \
         || die "makepkg packages/$pkg не удался"
@@ -241,13 +355,24 @@ for pkg in xros-cli xros-installer xros-welcome xros-branding; do
     chmod 644 "$ROOT/repo/xros/os/x86_64/$pkg"-*.pkg.tar.zst
 done
 echo "Пакеты скопированы в локальный репозиторий"
+fi
 
 # --- шаг 7: репозиторий ------------------------------------------------------------
 step "Обновление локального репозитория (repo-add в build-env)"
-"$BUILD_ENV" --exec -- bash -c 'cd /xros/repo/xros/os/x86_64 && repo-add xros.db.tar.gz *.pkg.tar.zst' \
-    || die "repo-add не удался"
-ls "$ROOT/repo/xros/os/x86_64/xros.db.tar.gz" >/dev/null \
-    || die "нет repo/xros/os/x86_64/xros.db.tar.gz после repo-add"
+if [[ "$RELEASE" -eq 1 ]]; then
+    # Релиз: repo-add пропущен — он пересоздал бы БД без подписи.
+    # БД и её подпись уже проверены релизным гейтом.
+    [[ -f "$ROOT/repo/xros/os/x86_64/xros.db.tar.gz" ]] \
+        || die "релиз: нет БД в repo/xros/os/x86_64"
+    [[ -f "$ROOT/repo/xros/os/x86_64/xros.db.tar.gz.sig" ]] \
+        || die "релиз: нет подписи БД в repo/xros/os/x86_64"
+    echo "Релиз: repo-add пропущен — БД уже подписана офлайн"
+else
+    "$BUILD_ENV" --exec -- bash -c 'cd /xros/repo/xros/os/x86_64 && repo-add xros.db.tar.gz *.pkg.tar.zst' \
+        || die "repo-add не удался"
+    ls "$ROOT/repo/xros/os/x86_64/xros.db.tar.gz" >/dev/null \
+        || die "нет repo/xros/os/x86_64/xros.db.tar.gz после repo-add"
+fi
 
 # --- шаг 8: снимок репозитория в живую систему --------------------------------------
 step "Снимок репозитория в profile/airootfs/usr/share/xros/repo/"
@@ -271,6 +396,28 @@ mkdir -p "$REPO_SNAP"
 cp -a --no-preserve=ownership "$ROOT/repo/xros" "$REPO_SNAP/"
 [[ -f "$REPO_SNAP/xros/os/x86_64/xros.db.tar.gz" ]] \
     || die "снимок репозитория не содержит xros.db.tar.gz"
+# A-40: production публичный ключ XrOS в живую систему — для импорта
+# в customize_airootfs.sh. Тестовый ключ из xros-gpg-test/ сюда НЕ
+# копируется: он только для xros-gpg-test/. Источник истины —
+# profile/airootfs/usr/share/xros/xros-gpg.conf (XROS_GPG_PROD_FPR,
+# XROS_GPG_PROD_KEY). Пока FPR пуст — production GPG не настроен:
+# dev-сборка продолжается с явным предупреждением (SigLevel=Optional),
+# релизная сборка (--release) блокируется гейтом на старте.
+# shellcheck disable=SC1091
+. "$PROFILE/airootfs/usr/share/xros/xros-gpg.conf"
+if [[ -z "${XROS_GPG_PROD_FPR:-}" ]]; then
+    rm -f "$PROFILE/airootfs/usr/share/xros/xros-public.key"
+    echo "ПРЕДУПРЕЖДЕНИЕ: production GPG не настроен (XROS_GPG_PROD_FPR пуст в xros-gpg.conf) — dev-режим: ключ XrOS не попадёт в живую систему, SigLevel=Optional; релизная сборка (--release) заблокирована"
+elif [[ ! -f "$ROOT/${XROS_GPG_PROD_KEY:-xros-gpg-prod/xros-public.key}" ]]; then
+    die "production GPG: XROS_GPG_PROD_FPR задан, но нет файла ключа $ROOT/${XROS_GPG_PROD_KEY:-xros-gpg-prod/xros-public.key} — положите публичный ключ (см. xros-gpg-prod/README.md)"
+else
+    "$ROOT/profile/airootfs/usr/local/bin/xros-gpg-check" "$ROOT/${XROS_GPG_PROD_KEY}" "$XROS_GPG_PROD_FPR" \
+        || die "production GPG: публичный ключ не прошёл проверку отпечатка (см. вывод выше)"
+    mkdir -p "$PROFILE/airootfs/usr/share/xros"
+    cp "$ROOT/${XROS_GPG_PROD_KEY}" "$PROFILE/airootfs/usr/share/xros/xros-public.key"
+    chmod 644 "$PROFILE/airootfs/usr/share/xros/xros-public.key"
+    echo "Production публичный ключ XrOS скопирован в живую систему (FPR $XROS_GPG_PROD_FPR)"
+fi
 
 # --- шаг 9: бинари в живую систему ---------------------------------------------------
 step "Бинари в profile/airootfs/usr/local/bin/"
@@ -304,11 +451,95 @@ for b in xros xros-install-gui xros-install xros-welcome xros-welcome-gui xros-i
 done
 [[ -f "$DIAMOND_LIB/main.py" && -f "$DIAMOND_LIB/bridge.py" && -d "$DIAMOND_LIB/qml" ]] \
   || die "Diamond не скопирован в живую систему"
+# A-37: сверка хешей пакет→airootfs: бинарь в живой системе обязан
+# совпадать с содержимым собранного пакета (иначе в ISO попадёт не
+# то, что в репозитории). bsdtar — на хосте (libarchive); если его
+# нет — сверка со staged-файлом в packages/ (тоже честная проверка:
+# пакет собран из него на шаге 6). Скрипты и Diamond — побайтовым
+# сравнением с src/.
+for spec in "xros-cli xros usr/local/bin/xros" "xros-installer xros-install-gui usr/local/bin/xros-install-gui"; do
+    read -r _pkg _bin _path <<< "$spec"
+    _pkgfile="$(ls -t "$ROOT/packages/$_pkg"/"$_pkg"-*.pkg.tar.zst 2>/dev/null | head -1)"
+    [[ -n "$_pkgfile" ]] || die "A-37: нет пакета $_pkg для сверки"
+    if command -v bsdtar >/dev/null 2>&1; then
+        _want="$(bsdtar -xOf "$_pkgfile" "$_path" 2>/dev/null | sha256sum | cut -d' ' -f1)"
+        [[ -n "$_want" ]] || die "A-37: в пакете $_pkg нет $_path"
+    else
+        echo "A-37: bsdtar нет на хосте — сверяю $_bin со staged-файлом в packages/$_pkg"
+        _want="$(sha256sum "$ROOT/packages/$_pkg/$_bin" | cut -d' ' -f1)"
+    fi
+    _got="$(sha256sum "$BIN_DIR/$_bin" | cut -d' ' -f1)"
+    [[ "$_got" == "$_want" ]] || die "A-37: $BIN_DIR/$_bin не совпадает с пакетом $_pkg (airootfs $_got, пакет $_want)"
+done
+cmp -s "$ROOT/src/xros-install" "$BIN_DIR/xros-install" \
+    || die "A-37: $BIN_DIR/xros-install не совпадает с src/xros-install"
+cmp -s "$ROOT/src/xros-welcome" "$BIN_DIR/xros-welcome" \
+    || die "A-37: $BIN_DIR/xros-welcome не совпадает с src/xros-welcome"
+cmp -s "$ROOT/src/xros-welcome-gui" "$BIN_DIR/xros-welcome-gui" \
+    || die "A-37: $BIN_DIR/xros-welcome-gui не совпадает с src/xros-welcome-gui"
+cmp -s "$DIAMOND_SRC/main.py" "$DIAMOND_LIB/main.py" \
+    || die "A-37: Diamond main.py в живой системе не совпадает с src/"
+cmp -s "$DIAMOND_SRC/bridge.py" "$DIAMOND_LIB/bridge.py" \
+    || die "A-37: Diamond bridge.py в живой системе не совпадает с src/"
+diff -rq "$DIAMOND_SRC/qml" "$DIAMOND_LIB/qml" >/dev/null \
+    || die "A-37: Diamond qml/ в живой системе не совпадает с src/"
+echo "A-37: бинари в живой системе совпадают с пакетами и src/"
 echo "Бинари в живой системе: 6 файлов + Diamond"
+
+# --- шаг 9а: нормализация прав профиля (A-02) ----------------------------------
+# Первопричина дефекта 10.11.2026 (чёрный экран): профиль в git хранит
+# только режимы 644/755, но в среде сборки (umask 0007, setgid-каталоги
+# 2770) рабочие копии получают 2770/660 — и mkarchiso копирует их в
+# живую систему как есть. chmod рабочего дерева в git не попадает,
+# поэтому нормализация делается ЗДЕСЬ, перед mkarchiso, при каждой
+# сборке. После нормализации — гейт check-rootfs-perms.sh --profile:
+# любая ошибка прав останавливает сборку до mkarchiso.
+step "Нормализация прав profile/airootfs (A-02) + гейт check-rootfs-perms.sh --profile"
+AIROOTFS="$PROFILE/airootfs"
+find "$AIROOTFS" -type d -exec chmod 755 {} +
+# R-11 RESUME (13.11.2026): на этом хосте (btrfs) числовой 'chmod 755'
+# НЕ снимает setgid-бит с каталогов (остаётся 2755) — нужен явный
+# 'g-s'. Без этого гейт check-rootfs-perms.sh падает на каталогах
+# repo-снимка (шаг 8 копирует их с setgid из repo/). Снимаем setgid
+# и setuid явно для всех файлов и каталогов профиля.
+find "$AIROOTFS" -exec chmod g-s {} +
+find "$AIROOTFS" -type f -exec chmod 644 {} +
+# Исполняемые файлы — те, что в git помечены 100755 (канон); если git
+# недоступен — известный список (customize + usr/local/bin/*).
+# RECOVERY-01 Phase D (13.11.2026): untracked-исполняемые (например,
+# xros-gpg-check) не попадают в git ls-files, поэтому дополнительно
+# восстанавливаем 755 для всех файлов в usr/local/bin/ и для
+# customize_airootfs.sh — иначе нормализация (chmod 644 выше) лишает
+# их бита исполнения, и диагностика A-40 падает.
+if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$ROOT" ls-files -s -- "$AIROOTFS" \
+        | awk '$1 == "100755" {print $4}' \
+        | while IFS= read -r f; do chmod 755 "$ROOT/$f"; done
+fi
+chmod 755 "$AIROOTFS/root/customize_airootfs.sh" "$AIROOTFS/usr/local/bin/"*
+# /root — 750 (как требует check-rootfs-perms.sh; 755 здесь — FAIL).
+chmod 750 "$AIROOTFS/root"
+"$ROOT/scripts/check-rootfs-perms.sh" --profile "$AIROOTFS" \
+    || die "права профиля не в норме (см. вывод выше) — mkarchiso остановлен"
+echo "Права профиля нормализованы и проверены"
+
+# --- шаг 9б: снимок репозитория [xros] в build-env rootfs (A-12) ----------------
+# pacman при pacstrap резолвит file://-сервер ОТНОСИТЕЛЬНО ХОСТА
+# (build-env rootfs), а не нового корня — тот же latent-дефект, что
+# в шаге 4б scripts/build-rootfs-pacstrap.sh. Без этой копии mkarchiso
+# падает с "Could not open file /usr/share/xros/repo/xros/os/x86_64/xros.db".
+step "Снимок репозитория [xros] в build-env rootfs (A-12)"
+mkdir -p "$ROOTFS/usr/share/xros/repo"
+cp -a --no-preserve=ownership "$ROOT/repo/xros" "$ROOTFS/usr/share/xros/repo/"
+[[ -f "$ROOTFS/usr/share/xros/repo/xros/os/x86_64/xros.db.tar.gz" ]] \
+    || die "нет xros.db.tar.gz в build-env после копирования снимка"
+echo "Снимок [xros] в build-env: /usr/share/xros/repo/xros/os/x86_64/ — OK"
 
 # --- шаг 10: mkarchiso внутри build-env rootfs ---------------------------------------
 step "mkarchiso внутри build-env rootfs (штатный archiso 92)"
-rm -rf "$WORK" "$OUT"/xros-*.iso
+# A-39: устаревший SHA256SUMS удаляется вместе со старыми ISO —
+# иначе пересборка сверялась бы со старым хешем (ложный FAIL на шаге 13).
+rm -rf "$WORK" "$OUT"/xros-*.iso "$OUT"/SHA256SUMS
 mkdir -p "$OUT"
 MK_LOG="$OUT/mkarchiso.log"
 # mkarchiso выполняется внутри rootfs (там archiso 92-1, grub 2.16,
@@ -330,16 +561,29 @@ HYBRID="${ISO%.iso}-hybrid.iso"
 [[ -f "$HYBRID" ]] || die "нет гибридного ISO: $HYBRID"
 echo "Гибридный ISO: $HYBRID ($(stat -c%s "$HYBRID") Б)"
 
-# --- шаг 12: финальная проверка --------------------------------------------------------
-step "Финальная проверка гибридного ISO (check-iso.sh --archiso)"
+# --- шаг 12: SHA256SUMS для итоговых ISO ---------------------------------------
+# A-39: SHA256SUMS пишется ДО проверки (шаг 13) и только для
+# окончательных файлов (исходный ISO mkarchiso + гибридный после
+# постобработки). Раньше было наоборот: проверка шла до создания
+# файла (ложный PASS при первой сборке, ложный FAIL при пересборке).
+step "SHA256SUMS для итоговых ISO (A-39)"
+(cd "$OUT" && sha256sum "$(basename "$ISO")" "$(basename "$HYBRID")" > SHA256SUMS) \
+    || die "не удалось создать $OUT/SHA256SUMS"
+grep -qF " $(basename "$ISO")" "$OUT/SHA256SUMS" \
+    || die "в SHA256SUMS нет записи для $(basename "$ISO")"
+grep -qF " $(basename "$HYBRID")" "$OUT/SHA256SUMS" \
+    || die "в SHA256SUMS нет записи для $(basename "$HYBRID")"
+echo "SHA256SUMS создан: $OUT/SHA256SUMS"
+
+# --- шаг 13: финальная проверка --------------------------------------------------------
+step "Финальная проверка гибридного ISO (check-iso.sh --archiso --require-sha256)"
 CHECK_LOG="$OUT/check-iso.log"
-"$CHECK_ISO" --archiso "$HYBRID" >"$CHECK_LOG" 2>&1 \
+"$CHECK_ISO" --archiso --require-sha256 "$HYBRID" >"$CHECK_LOG" 2>&1 \
     || { cat "$CHECK_LOG" >&2; die "check-iso.sh: есть FAIL (лог: $CHECK_LOG)"; }
 cat "$CHECK_LOG"
 
-# --- шаг 13: SHA256 и итог ---------------------------------------------------------------
-step "SHA256SUMS и итог"
-(cd "$OUT" && sha256sum "$(basename "$ISO")" "$(basename "$HYBRID")" > SHA256SUMS)
+# --- шаг 14: итог ----------------------------------------------------------------------
+step "Итог"
 echo "ГОТОВО:"
 echo "  ISO mkarchiso: $ISO"
 echo "  Гибридный ISO: $HYBRID"

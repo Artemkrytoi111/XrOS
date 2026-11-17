@@ -121,24 +121,38 @@ else
   exit 1
 fi
 
-# --- LD_PRELOAD-шим: один тестовый файл выглядит блочным устройством ---
-# Нужен только для [[ -b $DISK ]] в РЕАЛЬНОМ движке: mknod запрещён,
-# /dev пуст, loop-устройств нет. Шим трогает только путь из
-# $XROS_FAKEBLK, код движка не меняется.
+# --- LD_PRELOAD-шим: тестовые файлы выглядят блочными устройствами ---
+# Нужен для [[ -b $DISK ]] и пробы чтения R-18 в РЕАЛЬНОМ движке:
+# mknod запрещён, /dev пуст, loop-устройств нет. XROS_FAKEBLK —
+# список путей через ':' (диск + его разделы, как в
+# test-raid-block.sh): шим трогает только эти пути, код движка
+# не меняется. Узлы разделов нужны, иначе движок после sgdisk
+# останавливается на пробе чтения ${DISK}2 (R-18) до шага rsync.
 cat > "$T/fakeblk.c" <<'C_EOF'
 #define _GNU_SOURCE
 #include <sys/stat.h>
 #include <dlfcn.h>
 #include <string.h>
 #include <stdlib.h>
-static const char *tgt(void){ return getenv("XROS_FAKEBLK"); }
+static int is_fake(const char *p){
+  const char *t = getenv("XROS_FAKEBLK");
+  if (!t || !p) return 0;
+  const char *s = t;
+  while (1) {
+    const char *c = strchr(s, ':');
+    size_t n = c ? (size_t)(c - s) : strlen(s);
+    if (strlen(p) == n && strncmp(p, s, n) == 0) return 1;
+    if (!c) return 0;
+    s = c + 1;
+  }
+}
 static void fake_mode(struct stat *st){
   if (S_ISREG(st->st_mode)) st->st_mode = (st->st_mode & ~S_IFMT) | S_IFBLK;
 }
-int stat(const char *p, struct stat *b){ static int (*r)(const char*,struct stat*)=0; if(!r) r=dlsym(RTLD_NEXT,"stat"); int rc=r(p,b); const char *t=tgt(); if(rc==0&&t&&strcmp(p,t)==0) fake_mode(b); return rc; }
-int lstat(const char *p, struct stat *b){ static int (*r)(const char*,struct stat*)=0; if(!r) r=dlsym(RTLD_NEXT,"lstat"); int rc=r(p,b); const char *t=tgt(); if(rc==0&&t&&strcmp(p,t)==0) fake_mode(b); return rc; }
-int __xstat(int v, const char *p, struct stat *b){ static int (*r)(int,const char*,struct stat*)=0; if(!r) r=dlsym(RTLD_NEXT,"__xstat"); int rc=r(v,p,b); const char *t=tgt(); if(rc==0&&t&&strcmp(p,t)==0) fake_mode(b); return rc; }
-int __lxstat(int v, const char *p, struct stat *b){ static int (*r)(int,const char*,struct stat*)=0; if(!r) r=dlsym(RTLD_NEXT,"__lxstat"); int rc=r(v,p,b); const char *t=tgt(); if(rc==0&&t&&strcmp(p,t)==0) fake_mode(b); return rc; }
+int stat(const char *p, struct stat *b){ static int (*r)(const char*,struct stat*)=0; if(!r) r=dlsym(RTLD_NEXT,"stat"); int rc=r(p,b); if(rc==0&&is_fake(p)) fake_mode(b); return rc; }
+int lstat(const char *p, struct stat *b){ static int (*r)(const char*,struct stat*)=0; if(!r) r=dlsym(RTLD_NEXT,"lstat"); int rc=r(p,b); if(rc==0&&is_fake(p)) fake_mode(b); return rc; }
+int __xstat(int v, const char *p, struct stat *b){ static int (*r)(int,const char*,struct stat*)=0; if(!r) r=dlsym(RTLD_NEXT,"__xstat"); int rc=r(v,p,b); if(rc==0&&is_fake(p)) fake_mode(b); return rc; }
+int __lxstat(int v, const char *p, struct stat *b){ static int (*r)(int,const char*,struct stat*)=0; if(!r) r=dlsym(RTLD_NEXT,"__lxstat"); int rc=r(v,p,b); if(rc==0&&is_fake(p)) fake_mode(b); return rc; }
 C_EOF
 if gcc -shared -fPIC -o "$T/fakeblk.so" "$T/fakeblk.c" -ldl 2>/dev/null; then
   ok "E0b LD_PRELOAD-шим собран (gcc)"
@@ -148,12 +162,14 @@ else
   exit 1
 fi
 touch "$T/fakedisk"
-if XROS_FAKEBLK="$T/fakedisk" LD_PRELOAD="$T/fakeblk.so" bash -c "test -b '$T/fakedisk'"; then
-  ok "E0c шим: bash видит тестовый файл как блочное устройство"
+touch "$T/fakedisk1" "$T/fakedisk2" "$T/fakediskp1" "$T/fakediskp2"
+FAKEBLK_LIST="$T/fakedisk:$T/fakedisk1:$T/fakedisk2:$T/fakediskp1:$T/fakediskp2"
+if XROS_FAKEBLK="$FAKEBLK_LIST" LD_PRELOAD="$T/fakeblk.so" bash -c "test -b '$T/fakedisk' && test -b '$T/fakedisk2'"; then
+  ok "E0c шим: bash видит тестовый файл и разделы как блочные устройства"
 else
-  bad "E0c шим: bash видит тестовый файл как блочное устройство"
+  bad "E0c шим: bash видит тестовый файл и разделы как блочные устройства"
 fi
-if XROS_FAKEBLK="$T/fakedisk" LD_PRELOAD="$T/fakeblk.so" bash -c "test -b /etc/hostname" 2>/dev/null; then
+if XROS_FAKEBLK="$FAKEBLK_LIST" LD_PRELOAD="$T/fakeblk.so" bash -c "test -b /etc/hostname" 2>/dev/null; then
   bad "E0d шим не трогает остальные файлы"
 else
   ok "E0d шим не трогает остальные файлы"
@@ -672,7 +688,10 @@ mkstub dialog 'exit 0'
 cat > "$T/realbin/lsblk" <<EOF
 #!/usr/bin/env bash
 echo "lsblk \$*" >> "$T/calls.log"
-case "\$*" in *"-o TYPE"*) echo "disk";; *) echo "";; esac
+case "\$*" in *"-o TYPE"*) echo "disk";; *"-o SIZE"*) echo "21474836480";; *) echo "";; esac
+# A-18: заглушка lsblk возвращает реалистичный размер диска (20 ГиБ),
+# иначе проверка минимального размера (10 ГБ) в движке всегда падала бы
+# в тестовой среде, где «диск» — обычный файл, а не блочное устройство.
 exit 0
 EOF
 chmod +x "$T/realbin/lsblk"
@@ -735,12 +754,12 @@ mkdir -p /mnt/xros-install/etc /mnt/xros-install/boot
 echo "sentinel-passwd-content" > /mnt/xros-install/etc/passwd-sentinel
 echo "sentinel-vmlinuz-content" > /mnt/xros-install/boot/vmlinuz-sentinel
 sha256sum /mnt/xros-install/etc/passwd-sentinel /mnt/xros-install/boot/vmlinuz-sentinel > "$d/sentinel.before"
-export XROS_FAKEBLK="\$T/fakedisk"
+export XROS_FAKEBLK="$FAKEBLK_LIST"
 export XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF="$d/conf"
 export PATH="\$T/realbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export RSYNC_MODE="$rsync_mode" MKFS_FAIL="$mkfs_fail"
 export RSYNC_PIDFILE="$d/rsync.pid" RSYNC_WRITER_PID="$d/rsync-writer.pid"
-ENG_CMD=(setsid --wait env LD_PRELOAD="\$T/fakeblk.so" XROS_FAKEBLK="\$T/fakedisk" XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF="$d/conf" PATH="\$T/realbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" RSYNC_MODE="$rsync_mode" MKFS_FAIL="$mkfs_fail" RSYNC_PIDFILE="$d/rsync.pid" RSYNC_WRITER_PID="$d/rsync-writer.pid" bash "\$ENGINE")
+ENG_CMD=(setsid --wait env LD_PRELOAD="\$T/fakeblk.so" XROS_FAKEBLK="$FAKEBLK_LIST" XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF="$d/conf" PATH="\$T/realbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" RSYNC_MODE="$rsync_mode" MKFS_FAIL="$mkfs_fail" RSYNC_PIDFILE="$d/rsync.pid" RSYNC_WRITER_PID="$d/rsync-writer.pid" bash "\$ENGINE")
 if [[ "$kill_rsync" == "1" ]]; then
   "\${ENG_CMD[@]}" > "$d/engine.out" 2>&1 &
   ENG=\$!

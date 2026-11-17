@@ -120,6 +120,9 @@
 #     пробрасываются в rootfs (только если существуют; отсутствие —
 #     не ошибка).
 set -u
+# umask 022 (A-02): как в scripts/build.sh — в среде сборки umask 0007,
+# без этого файлы rootfs получают 660/2770.
+umask 022
 # set -e НЕ ставим глобально: часть проверок должна пережить ошибку
 # и честно доложить о ней; критичные места используют die()/проверки.
 
@@ -140,12 +143,10 @@ INIT_MARKER="$STATE_DIR/init-done"
 DEPS_MARKER="$STATE_DIR/deps-fetched"
 
 # --- защита от перекрёстных путей: этот скрипт работает ТОЛЬКО внутри
-# --- проекта XrOS (каталог должен называться `xros` и содержать
-# --- profile/ и этот самый скрипт) и никогда не обращается наружу.
-case "$PROJECT" in
-  */xros) ;;
-  *) echo "ОШИБКА: скрипт запущен вне проекта XrOS: $PROJECT" >&2; exit 2;;
-esac
+# --- проекта XrOS (каталог содержит profile/ и этот самый скрипт)
+# --- и никогда не обращается наружу. Имя каталога НЕ проверяется
+# --- (A-03): клон может называться как угодно (xros-audit/repo и т.п.),
+# --- канон — наличие profile/ и scripts/xros-build-env.sh.
 [[ -d "$PROJECT/profile" && -f "$PROJECT/scripts/xros-build-env.sh" ]] \
   || { echo "ОШИБКА: $PROJECT не похож на проект XrOS (нет profile/ или scripts/xros-build-env.sh)" >&2; exit 2; }
 
@@ -314,7 +315,7 @@ download_bootstrap() {
   fi
   log "скачиваю подпись: $BOOTSTRAP_SIG_URL"
   curl -fL -s -o "$BOOTSTRAP_SIG" "$BOOTSTRAP_SIG_URL" \
-    || warn "подпись .sig не скачалась — проверка GPG будет пропущена (НЕ рекомендуется, см. вывод)"
+    || die "не удалось скачать подпись .sig ($BOOTSTRAP_SIG_URL) — без проверенной подписи bootstrap не используется (A-08)"
   if [[ -s "$BOOTSTRAP_SIG" ]]; then
     log "проверяю подпись GPG (ключ Arch берётся с keyserver.ubuntu.com)..."
     if ! gpg --keyserver keyserver.ubuntu.com --keyserver-options auto-key-retrieve \
@@ -342,6 +343,13 @@ download_bootstrap() {
       fi
     fi
     log "подпись bootstrap: OK"
+  else
+    # A-08: отсутствие/пустота .sig — die, а не warn: установка
+    # непроверенного bootstrap недопустима. Отпечаток ключа Arch
+    # НЕ закреплён: в репозитории/документации проекта его нет,
+    # выдумывать отпечаток нельзя — ключ берётся из самой подписи
+    # (см. запасной путь выше).
+    die "подпись .sig отсутствует или пуста ($BOOTSTRAP_SIG) — без проверенной подписи bootstrap не используется"
   fi
 }
 
@@ -462,7 +470,7 @@ prepare_rootfs_for_pacman() {
 }
 
 install_build_tools() {
-  log "устанавливаю base-devel, rust, grub, pacman-contrib (pacman внутри rootfs; ~1–2 ГБ)..."
+  log "устанавливаю base-devel, rust, grub, pacman-contrib, archiso, squashfs-tools, libisoburn, mtools (pacman внутри rootfs; ~1–2 ГБ)..."
   # ВАЖНО (2026-11-10): pacman вызывается ВНУТРИ rootfs через chroot,
   # а не `pacman --root` с хоста — на не-Arch хосте pacman ОТСУТСТВУЕТ
   # (старый код падал бы с «pacman: command not found»). Внутри chroot
@@ -471,6 +479,10 @@ install_build_tools() {
   # внутри rootfs (bind pkgcache — в run_in_rootfs для nspawn-режима).
   # Пакеты: base-devel (gcc/makepkg/fakeroot), rust (cargo+rustc),
   # grub (grub-script-check), git (для PKGBUILD с git-источниками).
+  # A-03: archiso (mkarchiso — сборка ISO выполняется внутри rootfs),
+  # squashfs-tools (mksquashfs), libisoburn (xorriso — ISO9660/El Torito),
+  # mtools (FAT-образы EFI). Без них --init завершается «успешно»,
+  # а build.sh падает только на шаге mkarchiso.
   # Плюс ВНЕШНИЕ зависимости всех 4 PKGBUILD проекта (dialog, rsync,
   # parted, dosfstools, e2fsprogs, btrfs-progs, xfsprogs, gptfdisk,
   # efibootmgr, os-prober, libxkbcommon-x11, python-pyqt6): они нужны,
@@ -480,6 +492,7 @@ install_build_tools() {
   # сначала собирается и устанавливается пакет xros-branding
   # (pacman -U внутри rootfs), и только потом остальные три пакета.
   chroot_env pacman -Sy --noconfirm base-devel rust grub git pacman-contrib \
+    archiso squashfs-tools libisoburn mtools \
     dialog rsync parted dosfstools e2fsprogs btrfs-progs xfsprogs gptfdisk \
     efibootmgr os-prober libxkbcommon-x11 python-pyqt6 \
     || die "установка пакетов в rootfs не удалась"
@@ -501,15 +514,21 @@ create_builder_user() {
   # chmod, а .cargo/.cache создаются ОТ builder'а (runuser): созданные
   # им файлы сразу принадлежат ему, chown не нужен. Безопасность
   # makepkg от этого не страдает: PKGBUILD по-прежнему исполняется
-  # НЕ от root. 777 на домашнем каталоге — осознанный компромисс
-  # одноразового сборочного chroot (в ISO build-env не попадает).
+  # НЕ от root. Режим — 770, а не 777 (A-29): домашний каталог
+  # сборочного пользователя не должен быть доступен на запись всем;
+  # в ISO build-env не попадает, но 777 в любом случае недопустим.
   mkdir -p "$ROOTFS/home/$BUILD_USER/.cargo" "$ROOTFS/home/$BUILD_USER/.cache"
   if chroot_env chown -R "$BUILD_USER:$BUILD_USER" "/home/$BUILD_USER" 2>/dev/null; then
     log "домашний каталог $BUILD_USER выдан владельцу (chown сработал)"
   else
     warn "chown /home/$BUILD_USER не сработал (overlay/userns) — делаю каталог записываемым для builder'а"
     rm -rf "$ROOTFS/home/$BUILD_USER/.cargo" "$ROOTFS/home/$BUILD_USER/.cache"
-    chmod 777 "$ROOTFS/home/$BUILD_USER"
+    # A-29: 770 вместо 777. Группа — группа builder'а, если chgrp
+    # сработает; иначе владелец (useradd -m) — сам builder, и 770
+    # даёт ему rwx. Если ни то ни другое — поймает проверка записью
+    # ниже (die), а не молчаливый 777.
+    chroot_env chgrp "$BUILD_USER" "/home/$BUILD_USER" 2>/dev/null || true
+    chmod 770 "$ROOTFS/home/$BUILD_USER"
     chroot_env runuser -u "$BUILD_USER" -- mkdir -p "/home/$BUILD_USER/.cargo" "/home/$BUILD_USER/.cache" \
       || die "не удалось создать .cargo/.cache от пользователя $BUILD_USER"
   fi
@@ -527,6 +546,7 @@ init_via_pacstrap() {
   rm -rf "$ROOTFS"
   mkdir -p "$ROOTFS"
   pacstrap -c -d "$ROOTFS" base base-devel rust grub git pacman-contrib \
+    archiso squashfs-tools libisoburn mtools \
     || die "pacstrap не удался"
   create_builder_user
 }
@@ -748,6 +768,20 @@ do_build_rust() {
   if [[ "$offline" -eq 1 && ! -f "$DEPS_MARKER" ]]; then
     die "офлайн-сборка невозможна: кэш cargo пуст (нет метки deps-fetched). Сначала выполните ОНЛАЙН-сборку: $0 --build-rust"
   fi
+  # RECOVERY-01 Phase C (13.11.2026): изоляция Rust build target.
+  # XROS_CARGO_TARGET_DIR — отдельный target-каталог (по умолчанию
+  # 'target'). Повреждённый target/ (objcopy-инцидент R-20 E) НЕ
+  # должен использоваться как источник production-бинарников.
+  # XROS_BUILD_NO_STAGE=1 — собрать, но НЕ копировать бинари в
+  # production staging (packages/): официальный GUI/CLI уже
+  # восстановлены из проверенных источников, staging их не трогает.
+  # Собранные бинари остаются в rootfs, их SHA пишется в лог.
+  local target_dir="${XROS_CARGO_TARGET_DIR:-target}"
+  local no_stage="${XROS_BUILD_NO_STAGE:-0}"
+  if [[ "$no_stage" -eq 1 ]]; then
+    log "RECOVERY-01: no-stage режим — бинари НЕ копируются в staging (официальные GUI/CLI сохраняются)"
+  fi
+  log "RECOVERY-01: target-каталог: $target_dir"
   local crate
   for crate in src/xros-cli src/xros-install-gui-rs; do
     [[ -f "$PROJECT/$crate/Cargo.toml" ]] || die "нет $PROJECT/$crate/Cargo.toml"
@@ -757,16 +791,16 @@ do_build_rust() {
     # исключается из архива, но НЕ удаляется в копии — прерванная
     # сборка продолжается инкрементно.
     copy_to_builder "$crate" "xros-build/$name" 2 "$crate/target"
-    log "cargo build --release ${offline:+--offline }($crate, от пользователя $BUILD_USER)..."
+    log "cargo build --release ${offline:+--offline }($crate, от пользователя $BUILD_USER, target=$target_dir)..."
     # --jobs: на хосте ~8 ГБ RAM, из которых свободно ~0.5–1.2 ГБ;
     # параллельный rustc для eframe (wgpu/naga) легко упирается в OOM.
     # По умолчанию 1 задание; поднять можно через XROS_CARGO_JOBS.
     local cargo_jobs="${XROS_CARGO_JOBS:-1}"
     if [[ "$offline" -eq 1 ]]; then
-      run_in_rootfs builder -- cargo build --release --offline --jobs "$cargo_jobs" --manifest-path "/home/$BUILD_USER/xros-build/$name/Cargo.toml" \
+      run_in_rootfs builder -- env CARGO_TARGET_DIR="/home/$BUILD_USER/xros-build/$name/$target_dir" cargo build --release --offline --jobs "$cargo_jobs" --manifest-path "/home/$BUILD_USER/xros-build/$name/Cargo.toml" \
         || die "сборка $crate не удалась"
     else
-      run_in_rootfs builder -- cargo build --release --jobs "$cargo_jobs" --manifest-path "/home/$BUILD_USER/xros-build/$name/Cargo.toml" \
+      run_in_rootfs builder -- env CARGO_TARGET_DIR="/home/$BUILD_USER/xros-build/$name/$target_dir" cargo build --release --jobs "$cargo_jobs" --manifest-path "/home/$BUILD_USER/xros-build/$name/Cargo.toml" \
         || die "сборка $crate не удалась"
     fi
     local bin stage
@@ -775,10 +809,23 @@ do_build_rust() {
       xros-install-gui-rs) bin="xros-install-gui"; stage="packages/xros-installer/xros-install-gui";;
       *) die "неизвестный крейт: $name (нет правила стейджинга)";;
     esac
-    log "возвращаю в проект: Cargo.lock ($crate) и бинарь -> $stage ..."
-    run_in_rootfs root -- bash -c 'cp "/home/builder/xros-build/'"$name"'/Cargo.lock" "/xros/'"$crate"'/Cargo.lock" && cp "/home/builder/xros-build/'"$name"'/target/release/'"$bin"'" "/xros/'"$stage"'"' \
-      || die "не удалось вернуть артефакты $crate в проект"
-    log "готово: $crate -> $PROJECT/$stage"
+    # Cargo.lock возвращается всегда (офлайн-сборка его не меняет).
+    run_in_rootfs root -- bash -c 'cp "/home/builder/xros-build/'"$name"'/Cargo.lock" "/xros/'"$crate"'/Cargo.lock"' \
+      || die "не удалось вернуть Cargo.lock $crate в проект"
+    if [[ "$no_stage" -eq 1 ]]; then
+      # RECOVERY-01: бинарь НЕ копируется в staging. Пишем его SHA
+      # в лог для сравнения (чистая сборка в новом target даёт другой
+      # SHA из-за вшитого пути — это ожидаемо, не ошибка).
+      local built_sha
+      built_sha="$(run_in_rootfs root -- sha256sum "/home/builder/xros-build/$name/$target_dir/release/$bin" 2>/dev/null | awk '{print $1}')"
+      log "no-stage: $crate собран в $target_dir/release/$bin, SHA-256: ${built_sha:-<не удалось прочитать>}"
+      log "no-stage: staging $stage НЕ перезаписывается (официальный бинарь сохраняется)"
+    else
+      log "возвращаю в проект: бинарь -> $stage ..."
+      run_in_rootfs root -- bash -c 'cp "/home/builder/xros-build/'"$name"'/'"$target_dir"'/release/'"$bin"'" "/xros/'"$stage"'"' \
+        || die "не удалось вернуть артефакты $crate в проект"
+      log "готово: $crate -> $PROJECT/$stage"
+    fi
   done
   touch "$DEPS_MARKER"
   log "Rust-сборка ГОТОВА. Дальше — стейджинг в packages/ (см. scripts/build.sh, этап 2)."

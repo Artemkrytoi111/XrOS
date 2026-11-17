@@ -7,7 +7,7 @@
 
 pkgname=xros-welcome
 pkgver=1.0
-pkgrel=2
+pkgrel=3
 pkgdesc="Окно приветствия XrOS"
 arch=('any')
 url="https://xros.example"

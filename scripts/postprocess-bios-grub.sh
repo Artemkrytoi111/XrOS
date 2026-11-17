@@ -46,6 +46,9 @@
 # Проверки результата — scripts/check-iso.sh (отдельно).
 set -euo pipefail
 
+# umask 022 (A-02): как в scripts/build.sh — в среде сборки umask 0007.
+umask 022
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_ENV="$ROOT/scripts/xros-build-env.sh"

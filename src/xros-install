@@ -335,9 +335,507 @@ xros_has_mounts() {
 }
 # --- XROS: защита диска (конец) ---
 
+# Зарезервированные системные имена (A-31): useradd их примет, но они
+# конфликтуют с системными пользователями/сервисами (root, sddm, dbus
+# и т.д.). Проверка — до разметки, в обоих режимах (неинтерактивном
+# и диалоговом) и в GUI.
+XROS_RESERVED_USERS="root daemon bin sys sync games man lp mail news uucp proxy www-data backup list irc gnats nobody systemd-network systemd-timesync systemd-resolve messagebus polkitd sddm dbus sshd avahi colord rtkit git http ftp"
+xros_reserved_user() {
+  local u="$1" r
+  # shellcheck disable=SC2086
+  for r in $XROS_RESERVED_USERS; do
+    [[ "$u" == "$r" ]] && return 0
+  done
+  return 1
+}
+
+# A-24/A-38: диск/раздел заблокирован для установки, если на нём LVM/LUKS/RAID:
+# wipefs/mkfs уничтожили бы чужие тома. Проверка — до любой разрушительной
+# операции, в обеих ветках разметки.
+# Возврат (R-04): 0 = заблокирован (и уже напечатана причина),
+# 1 = свободен, 2 = ОШИБКА ПРОВЕРКИ (причина напечатана, продолжать
+# нельзя). Прямой вызов в `if` НЕДОПУСТИМ: код 2 в `if` трактовался бы
+# как «свободен» — вызывающие места обязаны использовать обёртку
+# xros_require_disk_free().
+#
+# Две независимые ноги (обе должны сказать «свободен»):
+#   1) lsblk FSTYPE/TYPE устройства и всех его потомков. Член MD RAID:
+#      FSTYPE=linux_raid_member, TYPE=part/disk; сам массив:
+#      TYPE=raid0/raid1/raid4/raid5/raid6/raid10. TYPE проверяется по
+#      ПРЕФИКСУ raid* — точное == "raid" не ловит raid1/raid5.
+#      R-02: FSTYPE-блоклист расширен всеми типами членов RAID/fakeraid,
+#      которые распознаёт blkid (проверено strings libblkid):
+#      linux_raid_member (MD), isw_raid_member (Intel RST),
+#      ddf_raid_member (SNIA DDF), promise_fasttrack_raid_member,
+#      adaptec_raid_member, hpt37x_raid_member, hpt45x_raid_member,
+#      jmicron_raid_member, lsi_mega_raid_member (LSI MegaRAID),
+#      nvidia_raid_member (nForce), silicon_medley_raid_member,
+#      via_raid_member; плюс LVM1_member — тот же класс, что и
+#      LVM2_member (физ. том LVM). zfs_member и VMFS_volume_member
+#      сознательно не блокируются здесь: это файловые системы
+#      пулов/хранилищ, а не члены RAID; решение по ним — отдельный этап.
+#   2) blkid -p (прямое чтение сигнатуры с устройства, без кэша) для
+#      устройства и всех его потомков: ловит НЕСОБРАННЫЙ массив, где
+#      /proc/mdstat пуст и mdadm в живой системе нет. Семантика кодов
+#      blkid -p (проверена на хосте: rc=0 — сигнатура найдена; файл
+#      с magic ext4 даёт rc=0, пустой файл и случайные данные — rc=2):
+#      R-18: rc=2 НЕОДНОЗНАЧЕН — это и «сигнатуры нет», и «устройство
+#      не открывается» (несуществующий путь, каталог, /dev/null —
+#      rc=2 при ПУСТОМ stderr; Permission denied — rc=2 при непустом
+#      stderr). Поэтому rc=2 трактуется как «нет сигнатуры» ТОЛЬКО
+#      после успешной пробы чтения устройства (xros_device_readable)
+#      и при пустом stderr blkid; иначе — ошибка проверки (код 2).
+#      Остальные коды blkid и ненулевой rc lsblk — ошибка проверки.
+# Чистый диск без FSTYPE — норма: пустой вывод при rc=0 означает
+# «сигнатур нет», а не ошибку (R-04).
+xros_disk_blocked() {
+  local dev="$1" reason=""
+  local _blocked_fstypes='LVM1_member|LVM2_member|crypto_LUKS|linux_raid_member|isw_raid_member|ddf_raid_member|promise_fasttrack_raid_member|adaptec_raid_member|hpt37x_raid_member|hpt45x_raid_member|jmicron_raid_member|lsi_mega_raid_member|nvidia_raid_member|silicon_medley_raid_member|via_raid_member'
+  # R-04: отсутствующая утилита — проверка невозможна, а не «свободно».
+  command -v lsblk >/dev/null 2>&1 || { say "ОШИБКА: нет утилиты lsblk — невозможно проверить $dev, установка прервана для безопасности (R-04)"; return 2; }
+  command -v blkid >/dev/null 2>&1 || { say "ОШИБКА: нет утилиты blkid — невозможно проверить $dev, установка прервана для безопасности (R-04)"; return 2; }
+  # R-18: сначала — проба чтения. Без неё пустой вывод lsblk/blkid
+  # (rc=0/2) неотличим от «устройство не читается», а значит,
+  # ни одна нога не вправе вынести вердикт «свободен».
+  xros_device_readable "$dev" || { say "ОШИБКА: устройство $dev не читается (нет узла, исчезло, нет прав или ошибка ввода-вывода) — невозможно проверить, установка прервана для безопасности (R-18)"; return 2; }
+  local _out _rc
+  _out="$(lsblk -n -o FSTYPE "$dev" 2>/dev/null)"; _rc=$?
+  if [[ $_rc -ne 0 ]]; then say "ОШИБКА: lsblk не смог прочитать $dev (код $_rc) — проверка невозможна, установка прервана (R-04)"; return 2; fi
+  if printf '%s\n' "$_out" | grep -qE "^(${_blocked_fstypes})$"; then
+    reason="FSTYPE из блоклиста (LVM/LUKS/RAID)"
+  else
+    _out="$(lsblk -n -o TYPE "$dev" 2>/dev/null)"; _rc=$?
+    if [[ $_rc -ne 0 ]]; then say "ОШИБКА: lsblk не смог прочитать $dev (код $_rc) — проверка невозможна, установка прервана (R-04)"; return 2; fi
+    if printf '%s\n' "$_out" | grep -qE '^(lvm|crypt|raid)'; then
+      reason="тома lvm/crypt/raid*"
+    fi
+  fi
+  if [[ -z "$reason" ]]; then
+    # Вторая нога: blkid -p по устройству и его потомкам (потомки —
+    # из lsblk -o PATH; если lsblk не смог их перечислить — ошибка
+    # проверки, а не молчаливое сужение до одного устройства).
+    local _paths _prc d btype _brc _blkid_err _leg_rc
+    _paths="$(lsblk -n -o PATH "$dev" 2>/dev/null)"; _prc=$?
+    if [[ $_prc -ne 0 ]]; then say "ОШИБКА: lsblk не смог перечислить потомков $dev (код $_prc) — проверка невозможна, установка прервана (R-04)"; return 2; fi
+    _blkid_err="$(mktemp)" || { say "ОШИБКА: не удалось создать временный файл для stderr blkid — проверка невозможна (R-18)"; return 2; }
+    # Без trap RETURN: он протекает в вызывающую функцию и падает
+    # под set -u на уже уничтоженной локальной переменной (поймано
+    # тестом). Поэтому ранние выходы из цикла — через _leg_rc+break,
+    # а удаление временного файла — в одном месте после цикла.
+    _leg_rc=0
+    for d in "$dev" $(printf '%s\n' "$_paths" | grep -vxF -- "$dev" || true); do
+      # R-18: потомок тоже проверяется пробой чтения до blkid: rc=2
+      # без неё неоднозначен (нет сигнатуры vs не открывается).
+      if ! xros_device_readable "$d"; then
+        say "ОШИБКА: устройство $d (потомок $dev) не читается — невозможно проверить, установка прервана для безопасности (R-18)"; _leg_rc=2; break
+      fi
+      # stderr blkid — второй различитель: Permission denied и другие
+      # ошибки blkid сообщает в stderr (проверено), а «нет сигнатуры»
+      # молчалива. Непустой stderr — ошибка проверки, даже при rc=2.
+      btype="$(blkid -p -s TYPE -o value "$d" 2>"$_blkid_err")"; _brc=$?
+      if [[ -s "$_blkid_err" ]]; then
+        say "ОШИБКА: blkid сообщил об ошибке для $d: $(head -1 "$_blkid_err") — проверка невозможна, установка прервана (R-18)"; _leg_rc=2; break
+      fi
+      if [[ $_brc -eq 0 ]]; then
+        if printf '%s\n' "$btype" | grep -qE "^(${_blocked_fstypes})$"; then
+          reason="blkid TYPE=$btype ($d)"
+          break
+        fi
+      elif [[ $_brc -eq 2 ]]; then
+        : # сигнатуры нет: устройство доказано читаемым пробой выше,
+        # а blkid молчалив — это норма для чистого устройства
+      else
+        say "ОШИБКА: blkid не смог прочитать $d (код $_brc) — проверка невозможна, установка прервана (R-04)"; _leg_rc=2; break
+      fi
+    done
+    rm -f "$_blkid_err"
+    if [[ $_leg_rc -ne 0 ]]; then return "$_leg_rc"; fi
+  fi
+  if [[ -n "$reason" ]]; then
+    say "ОШИБКА: $dev заблокирован для установки ($reason): освободите диск вручную — установка на LVM/LUKS/RAID не поддерживается"
+    return 0
+  fi
+  return 1
+}
+
+# R-18: устройство пригодно для проверки сигнатуры, только если
+# его первый сектор читается. blkid -p с rc=2 НЕ различает
+# «сигнатуры нет» и «устройство не открывается» (проверено на хосте:
+# несуществующий путь, каталог, /dev/null — rc=2, stderr ПУСТ;
+# Permission denied от имени nobody — rc=2, stderr непуст).
+# Поэтому rc=2 трактуется как «нет сигнатуры» ТОЛЬКО после успешной
+# пробы чтения; иначе — ошибка проверки (код 2), а не «свободен».
+# Проба — чтение 512 байт (только чтение, разметка не меняется).
+# [[ -b ]] отсекает не-блочные пути; head ловит исчезнувшее
+# устройство (ENXIO), ошибку ввода-вывода и отсутствие носителя
+# (ENOMEDIUM). Пустое устройство нулевого размера пробу проходит
+# (EOF — не ошибка): сигнатуры на нём действительно нет, а размер
+# проверяется отдельно при выборе цели установки.
+xros_device_readable() {
+  local d="$1"
+  [[ -b "$d" ]] || return 1
+  head -c 512 "$d" >/dev/null 2>&1
+}
+xros_require_disk_free() {
+  local _rc
+  xros_disk_blocked "$1"; _rc=$?
+  [[ $_rc -eq 1 ]]
+}
+
+# P4-AUD-02: отключить конкурирующий менеджер входа в установленной
+# системе. Различает «юнит отсутствует» (безопасно пропустить) и
+# «реальная ошибка» (fail-closed). Юнит считается существующим, если
+# его файл есть в одном из стандартных каталогов юнитов целевой
+# системы. Уже отключённый юнит: systemctl disable завершается кодом 0
+# (идемпотентен) — это не ошибка. Замаскированный юнит: его файл —
+# симлинк на /dev/null, [ -e ] его видит, disable завершается кодом 0,
+# маска при этом остаётся (снять её может только unmask — не делаем).
+# P4-AUD-04 FIX-A: абсолютный симлинк на файл внутри цели тоже считается
+# существующим (цель проверяется внутри $TARGET); висячий симлинк —
+# по-прежнему пропуск (V-03, доказанно безвредно).
+# R-22: разрешить путь внутри $TARGET (chroot-семантика).
+# Алгоритм (покомпонентный, без обращения к хосту):
+# - вход — абсолютный путь, как видит его установленная система
+#   (напр. /usr/lib/systemd/system/gdm.service);
+# - компоненты обрабатываются слева направо; уже разрешённый префикс
+#   хранится как строка без ведущего / (resolved);
+# - '.' и пустые компоненты пропускаются; '..' убирает последний
+#   компонент, но не выходит выше корня цели (chroot-семантика);
+# - каждый компонент проверяется на симлинк ([ -L ] под $TARGET);
+#   цель читается readlink и подставляется в начало очереди:
+#   абсолютная цель — относительно корня цели (resolved сбрасывается),
+#   относительная — относительно каталога симлинка;
+# - промежуточные симлинки разрешаются так же, как финальный;
+# - лимит переходов 40 (как MAXSYMLINKS в ядре) — защита от циклов.
+# - /dev/null считается существующим: arch-chroot bind-mountит /dev
+#   в цель, поэтому маска (симлинк на /dev/null) — не висячая.
+# $1 — путь внутри цели (абсолютный, с ведущим /).
+# Печатает разрешённый абсолютный путь под $TARGET.
+# Возврат: 0 — разрешён, конечный объект существует;
+# 1 — висячий (цель не существует); 2 — цикл/слишком много переходов;
+# 3 — ошибка (нечитаемый путь, readlink не удался).
+xros_resolve_in_target() {
+  local input="$1"
+  local hops=0 max_hops=40
+  local queue="$input" resolved="" comp rest full tgt
+  while [[ -n "$queue" ]]; do
+    case "$queue" in
+      */*) comp="${queue%%/*}"; rest="${queue#*/}" ;;
+      *)   comp="$queue"; rest="" ;;
+    esac
+    queue="$rest"
+    case "$comp" in
+      ''|'.') continue ;;
+      '..')
+        case "$resolved" in
+          */*) resolved="${resolved%/*}" ;;
+          *)   resolved="" ;;
+        esac
+        ;;
+      *)
+        if [[ -n "$resolved" ]]; then
+          resolved="$resolved/$comp"
+        else
+          resolved="$comp"
+        fi
+        full="$TARGET/$resolved"
+        if [[ -L "$full" ]]; then
+          tgt="$(readlink "$full")" || return 3
+          hops=$((hops+1))
+          (( hops > max_hops )) && return 2
+          case "$resolved" in
+            */*) resolved="${resolved%/*}" ;;
+            *)   resolved="" ;;
+          esac
+          if [[ "$tgt" == /* ]]; then
+            # Абсолютная цель — относительно корня цели.
+            if [[ -n "$queue" ]]; then
+              queue="${tgt#/}/$queue"
+            else
+              queue="${tgt#/}"
+            fi
+            resolved=""
+          else
+            # Относительная цель — относительно каталога симлинка.
+            if [[ -n "$queue" ]]; then
+              queue="$tgt/$queue"
+            else
+              queue="$tgt"
+            fi
+          fi
+        fi
+        ;;
+    esac
+  done
+  local final="$TARGET/$resolved"
+  # R-22: /dev/null — особый случай. arch-chroot bind-mountит /dev в цель,
+  # поэтому /dev/null существует внутри chroot, даже если на диске
+  # $TARGET/dev/null нет. Маска (симлинк на /dev/null) — не висячая:
+  # disable на замаскированном юните возвращает rc=0 (R8), а
+  # xros_verify_default_target отклоняет её отдельной проверкой.
+  if [[ "$final" == "$TARGET/dev/null" ]] || [[ -e "$final" ]]; then
+    printf '%s\n' "$final"
+    return 0
+  fi
+  return 1
+}
+
+xros_disable_dm() {
+  local unit="$1"
+  local f resolved rc
+  for f in "$TARGET/usr/lib/systemd/system/$unit" \
+           "$TARGET/usr/local/lib/systemd/system/$unit" \
+           "$TARGET/etc/systemd/system/$unit"; do
+    # R-22 (R21-A-LOW-1, R21-A-LOW-2): разрешить путь внутри $TARGET
+    # (chroot-семантика). Прямые [ -e ] и readlink разрешают абсолютные
+    # симлинки относительно хоста, а не $TARGET; цепочки — только один
+    # уровень. Resolver следует по цепочкам внутри $TARGET.
+    resolved="$(xros_resolve_in_target "${f#$TARGET}")"
+    rc=$?
+    case "$rc" in
+      0)
+        # существует внутри цели — отключаем
+        ;;
+      1)
+        # висячий симлинк (V-03, доказанно безвредно: systemctl disable
+        # на висячем юните возвращает rc=1, вызывать его нельзя) — пропуск
+        continue
+        ;;
+      2)
+        say "ОШИБКА: не удалось определить состояние $unit: циклическая ссылка в установленной системе (см. $LOG)"; exit 1
+        ;;
+      *)
+        say "ОШИБКА: не удалось определить состояние $unit: ошибка разрешения пути в установленной системе (см. $LOG)"; exit 1
+        ;;
+    esac
+    arch-chroot "$TARGET" systemctl disable "$unit" >>"$LOG" 2>&1 \
+      || { say "ОШИБКА: не удалось отключить $unit в установленной системе — конкурирующий менеджер входа останется включённым (см. $LOG)"; exit 1; }
+    return 0
+  done
+  say "Пропуск: $unit отсутствует в установленной системе"
+  return 0
+}
+
+# P4-AUD-02 V-01: проверить владельца display-manager.service ДО
+# настройки менеджера входа. Если alias уже принадлежит неизвестному
+# менеджеру входа (не sddm/lightdm/gdm и не выбранный DM), установка
+# прерывается fail-closed: установщик НЕ перезаписывает чужой alias
+# и НЕ удаляет неизвестный DM — его владелец и состояние неизвестны,
+# а принудительная перезапись могла бы сломать чужую систему.
+# Висячий alias — не отказ: реальный systemctl удаляет его и создаёт
+# заново (проверено A1). Alias как обычный файл/каталог — отказ:
+# enable всё равно упал бы (E14/B1/B2), но здесь ошибка понятнее и
+# частичное состояние (wants-симлинк) не создаётся.
+# Вызывается в графических ветках ДО цикла отключения конкурентов.
+# В ветке DE=none не вызывается: DM не включается, alias не важен
+# (цель по умолчанию — multi-user.target).
+xros_check_dm_alias() {
+  local link="$TARGET/etc/systemd/system/display-manager.service"
+  local target name upath
+  # DM не выбран — проверять нечего.
+  [[ -n "$DE_DM" ]] || return 0
+  # Alias отсутствует — нечего проверять.
+  [[ -e "$link" || -L "$link" ]] || return 0
+  # Alias существует, но не симлинк — enable упадёт; даём понятную
+  # ошибку раньше, чем создавать частичное состояние.
+  if [[ ! -L "$link" ]]; then
+    if [[ -d "$link" ]]; then
+      say "ОШИБКА: display-manager.service в установленной системе — каталог, а не симлинк; установщик не может безопасно включить $DE_DM. Удалите этот каталог вручную и повторите установку (см. $LOG)"
+    else
+      say "ОШИБКА: display-manager.service в установленной системе — обычный файл, а не симлинк; установщик не может безопасно включить $DE_DM. Удалите этот файл вручную и повторите установку (см. $LOG)"
+    fi
+    exit 1
+  fi
+  target="$(readlink "$link")" || { say "ОШИБКА: не удалось прочитать display-manager.service в установленной системе (см. $LOG)"; exit 1; }
+  # Имя владельца alias (basename цели без .service).
+  name="${target##*/}"
+  name="${name%.service}"
+  # Выбранный DM или известный конкурент — порядок: цикл отключения
+  # снимет alias конкурента, enable выбранного идемпотентен.
+  case "$name" in
+    "$DE_DM"|sddm|lightdm|gdm) return 0 ;;
+  esac
+  # Висячий alias (цель не существует внутри цели) — systemctl
+  # удаляет его и создаёт заново, это не конфликт.
+  case "$target" in
+    /*) upath="$TARGET$target" ;;
+    *)  upath="$TARGET/etc/systemd/system/$target" ;;
+  esac
+  [[ -e "$upath" || -L "$upath" ]] || return 0
+  # Неизвестный владелец с существующей целью — fail-closed.
+  say "ОШИБКА: display-manager.service в установленной системе уже принадлежит неизвестному менеджеру входа «$name» ($target). Установщик не перезаписывает чужой alias и не удаляет неизвестный менеджер входа. Безопасное устранение: отключите $name в установленной системе (arch-chroot $TARGET systemctl disable $name.service) и повторите установку (см. $LOG)"
+  exit 1
+}
+
+# P4-AUD-02 V-07: финальная проверка менеджера входа по РЕАЛЬНОМУ
+# состоянию установленной системы, а не по подстроке имени. Проверяет:
+# alias — симлинк; цель — ровно $DE_DM.service (точное имя, не
+# подстрока: sddm-foo.service не проходит); файл цели существует
+# (не висячий alias); это обычный файл (не каталог); юнит не
+# замаскирован (не симлинк на /dev/null); в файле есть секция [Unit].
+# Любое несоответствие — fail-closed. Гонка TOCTOU между enable и
+# проверкой (класс R-05) остаётся, но окно сужено: проверяется
+# реальное состояние, а не строка.
+xros_verify_dm() {
+  local link="$TARGET/etc/systemd/system/display-manager.service"
+  local target name upath
+  [[ -L "$link" ]] || { say "ОШИБКА: менеджер входа $DE_DM не включён: display-manager.service в установленной системе отсутствует или не является симлинком"; exit 1; }
+  target="$(readlink "$link")" || { say "ОШИБКА: не удалось прочитать display-manager.service в установленной системе (см. $LOG)"; exit 1; }
+  name="${target##*/}"
+  [[ "$name" == "$DE_DM.service" ]] || { say "ОШИБКА: менеджер входа $DE_DM не включён: display-manager.service указывает на $target, а не на $DE_DM.service"; exit 1; }
+  case "$target" in
+    /*) upath="$TARGET$target" ;;
+    *)  upath="$TARGET/etc/systemd/system/$target" ;;
+  esac
+  [[ -e "$upath" || -L "$upath" ]] || { say "ОШИБКА: менеджер входа $DE_DM не включён: display-manager.service указывает на несуществующий юнит $target (висячий alias)"; exit 1; }
+  if [[ -L "$upath" && ! -e "$upath" ]]; then
+    say "ОШИБКА: менеджер входа $DE_DM не включён: юнит $target — висячий симлинк"; exit 1
+  fi
+  if [[ -L "$upath" ]] && [[ "$(readlink "$upath")" == "/dev/null" ]]; then
+    say "ОШИБКА: менеджер входа $DE_DM не включён: юнит $target замаскирован (симлинк на /dev/null)"; exit 1
+  fi
+  [[ -f "$upath" ]] || { say "ОШИБКА: менеджер входа $DE_DM не включён: юнит $target — не обычный файл"; exit 1; }
+  grep -q '^\[Unit\]' "$upath" || { say "ОШИБКА: менеджер входа $DE_DM не включён: юнит $target повреждён (нет секции [Unit])"; exit 1; }
+}
+
+# P4-AUD-04 FIX-B (V-09): проверка default target для ветки DE=none.
+# Подтверждает по реальному состоянию цели, что default.target —
+# симлинк на ожидаемый юнит (multi-user.target), цель существует
+# внутри цели, является обычным файлом с секцией [Unit] и не замаскирована.
+# Абсолютные пути разрешаются внутри $TARGET, а не по хосту.
+xros_verify_default_target() {
+  local expected="$1"
+  local link="$TARGET/etc/systemd/system/default.target"
+  local target name resolved rc upath
+  [[ -L "$link" ]] || { say "ОШИБКА: default target не задан: $link отсутствует или не является симлинком в установленной системе (см. $LOG)"; exit 1; }
+  target="$(readlink "$link")" || { say "ОШИБКА: не удалось прочитать default.target в установленной системе (см. $LOG)"; exit 1; }
+  name="${target##*/}"
+  [[ "$name" == "$expected" ]] || { say "ОШИБКА: default target указывает на $target, а не на $expected (см. $LOG)"; exit 1; }
+  # R-22 (R21-B-LOW-1): разрешить цель внутри $TARGET (chroot-семантика).
+  # Прямая проверка [ -e "$TARGET$target" ] следует по симлинкам
+  # относительно хоста: юнит-симлинк на хостовый файл с [Unit]
+  # принимался. Resolver гарантирует, что конечный файл — внутри $TARGET.
+  case "$target" in
+    /*) resolved="$(xros_resolve_in_target "$target")" ;;
+    *)  resolved="$(xros_resolve_in_target "/etc/systemd/system/$target")" ;;
+  esac
+  rc=$?
+  case "$rc" in
+    0) upath="$resolved" ;;
+    1) say "ОШИБКА: default target висячий: цель $target отсутствует в установленной системе (см. $LOG)"; exit 1 ;;
+    2) say "ОШИБКА: default target висячий: цель $target — циклическая ссылка в установленной системе (см. $LOG)"; exit 1 ;;
+    *) say "ОШИБКА: default target висячий: не удалось разрешить цель $target в установленной системе (см. $LOG)"; exit 1 ;;
+  esac
+  # upath — реальный файл внутри $TARGET (resolver уже следовал по
+  # симлинкам; маска на /dev/null даёт либо висячий, либо не-файл).
+  if [[ "$upath" == "$TARGET/dev/null" ]]; then
+    say "ОШИБКА: default target $expected замаскирован (симлинк на /dev/null) (см. $LOG)"; exit 1
+  fi
+  [[ -f "$upath" ]] || { say "ОШИБКА: default target $expected — не обычный файл (см. $LOG)"; exit 1; }
+  grep -q '^\[Unit\]' "$upath" || { say "ОШИБКА: default target $expected повреждён: нет секции [Unit] (см. $LOG)"; exit 1; }
+}
+
+# --- XROS: импорт ключа XrOS (начало) ---
+# A-40: production-ключ XrOS в keyring установленной системы.
+# Источник истины — /usr/share/xros/xros-gpg.conf в живой системе
+# (тот же файл, что в customize и build.sh) и публичный ключ
+# /usr/share/xros/xros-public.key (копируется rsync'ом в цель).
+# Пока FPR пуст — production GPG не настроен: явное предупреждение,
+# установка продолжается (пакеты уже на месте), но [xros] не
+# объявляется рабочим. Когда FPR задан — строгий путь: проверка
+# ключа, --add, проверка отпечатка, --lsign-key, проверка наличия
+# в keyring цели. Любая ошибка — возврат 1, вызов останавливает
+# установку ДО операций, зависящих от [xros] (pacman -S ниже).
+xros_import_xros_key() {
+  local fpr="" key_src="/usr/share/xros/xros-public.key"
+  if [[ -f /usr/share/xros/xros-gpg.conf ]]; then
+    # shellcheck disable=SC1091
+    . /usr/share/xros/xros-gpg.conf
+    fpr="${XROS_GPG_PROD_FPR:-}"
+  fi
+  if [[ -z "$fpr" ]]; then
+    say "ВНИМАНИЕ: production GPG не настроен (XROS_GPG_PROD_FPR пуст) — ключ XrOS не импортирован в установленную систему, репозиторий [xros] не будет проверяться подписью (A-40)"
+    return 0
+  fi
+  [[ -f "$key_src" ]] || { say "ОШИБКА: production GPG: нет $key_src при заданном XROS_GPG_PROD_FPR=$fpr (A-40)"; return 1; }
+  /usr/local/bin/xros-gpg-check "$key_src" "$fpr" >>"$LOG" 2>&1 \
+    || { say "ОШИБКА: production GPG: публичный ключ не прошёл проверку отпечатка (A-40) — см. $LOG"; return 1; }
+  arch-chroot "$TARGET" pacman-key --add /usr/share/xros/xros-public.key >>"$LOG" 2>&1 \
+    || { say "ОШИБКА: pacman-key --add не удался в установленной системе (A-40) — см. $LOG"; return 1; }
+  local finger_out
+  finger_out="$(arch-chroot "$TARGET" pacman-key --finger "$fpr" 2>&1)" \
+    || { say "ОШИБКА: pacman-key --finger не удался в установленной системе (A-40) — см. $LOG"; return 1; }
+  printf '%s\n' "$finger_out" >>"$LOG"
+  printf '%s' "$finger_out" | tr -d '[:space:]' | grep -qi "${fpr// /}" \
+    || { say "ОШИБКА: отпечаток $fpr не найден в keyring установленной системы после --add (A-40)"; return 1; }
+  arch-chroot "$TARGET" pacman-key --lsign-key "$fpr" >>"$LOG" 2>&1 \
+    || { say "ОШИБКА: pacman-key --lsign-key не удался в установленной системе (A-40) — см. $LOG"; return 1; }
+  arch-chroot "$TARGET" pacman-key --list-keys "$fpr" >>"$LOG" 2>&1 \
+    || { say "ОШИБКА: ключ $fpr не найден в keyring установленной системы после --lsign-key (A-40) — см. $LOG"; return 1; }
+  say "GPG: production-ключ $fpr импортирован в установленную систему (A-40)"
+  return 0
+}
+# --- XROS: импорт ключа XrOS (конец) ---
+
+# --- Пункт 7 (1.1): подписан ли репозиторий [xros] ---
+# Ворота для автообновления (xros-auto-update.timer): таймер можно
+# включать ТОЛЬКО если репозиторий [xros] подписан — нужны ОБА условия:
+#   1) production-ключ настроен (XROS_GPG_PROD_FPR задан в
+#      /usr/share/xros/xros-gpg.conf; сам ключ уже импортирован выше
+#      функцией xros_import_xros_key — при её ошибке установка
+#      прервалась бы раньше, до этого места);
+#   2) SigLevel для [xros] в pacman.conf цели равен Required — явная
+#      строка в секции [xros], глобальный SigLevel не считается
+#      (fail-closed: если секция молчит, считаем неподписанным).
+# Одного ключа без Required мало: при SigLevel Optional pacman принял
+# бы и неподписанные пакеты. Возврат: 0 — подписан, 1 — нет.
+xros_xros_repo_signed() {
+  local fpr="" conf="$TARGET/etc/pacman.conf" sig=""
+  if [[ -f /usr/share/xros/xros-gpg.conf ]]; then
+    # shellcheck disable=SC1091
+    . /usr/share/xros/xros-gpg.conf
+    fpr="${XROS_GPG_PROD_FPR:-}"
+  fi
+  [[ -n "$fpr" ]] || return 1
+  [[ -f "$conf" ]] || return 1
+  sig=$(awk '/^\[xros\]/{in_xros=1; next} /^\[/{in_xros=0} in_xros && /^[[:space:]]*SigLevel[[:space:]]*=/ {print; exit}' "$conf" 2>/dev/null || true)
+  [[ "$sig" == *"Required"* ]] || return 1
+  return 0
+}
+
+# A-25: после пересоздания таблицы разделов ядро/udev должны увидеть
+# новые узлы ДО mkfs: голый `sleep 1` — гонка (на медленном железе
+# узла ещё нет, mkfs падает). partprobe + udevadm settle + цикл
+# ожидания: хотя бы один из узлов-кандидатов должен появиться.
+# $1 — диск, остальные — узлы-кандидаты (${DISK}p1/${DISK}1 и т.п.).
+xros_wait_part() {
+  local disk="$1"; shift
+  local part i=0
+  partprobe "$disk" 2>/dev/null || true
+  udevadm settle --timeout=10 2>/dev/null || true
+  while [[ $i -lt 20 ]]; do
+    for part in "$@"; do
+      [[ -b "$part" ]] && return 0
+    done
+    sleep 0.5
+    i=$((i+1))
+  done
+  # A-25 (испр.): таймаут ожидания — НЕ жёсткая ошибка. Ниже есть
+  # fallback по суффиксу ([[ -b "${DISK}p1" ]] → p-суффикс, иначе
+  # обычный), а mkfs сообщит об ошибке, если узла реально нет.
+  # Жёсткий exit 1 здесь ломал и тестовый стенд (фиктивный диск без
+  # настоящих узлов разделов), и диски, где udev медленный.
+  say "ВНИМАНИЕ: разделы не появились после разметки $disk за 10 с (udev): $* — продолжаю с проверкой суффикса; mkfs сообщит об ошибке, если узла нет"
+  return 0
+}
+
 # Форматирование корневого раздела под выбранную ФС.
 mkfs_root() {
   local part="$1" fs="$2"
+  # A-38: последняя проверка непосредственно перед mkfs: раздел мог
+  # стать членом RAID между выбором и форматированием, а GUI мог
+  # пропустить его другим путём — движок не форматирует заблокированное.
+  if ! xros_require_disk_free "$part"; then return 1; fi
   case "$fs" in
     btrfs)
       mkfs.btrfs -f -L XROS-OS "$part" >>"$LOG" 2>&1
@@ -349,6 +847,132 @@ mkfs_root() {
       mkfs.ext4 -F -L XROS-OS "$part" >>"$LOG" 2>&1
       ;;
   esac
+}
+
+# --- Пункт 4 (1.1): живой прогресс копирования (progress2, человеческие единицы) ---
+# Проблема: rsync --info=progress2 пишет прогресс только в $LOG, а gauge
+# во время копирования стоит на 30% и прыгает сразу на 70% — отсюда
+# «скачущие проценты»; без --human-readable размеры в журнале — в байтах.
+# GUI (src/xros-install-gui-rs/src/install.rs) и dialog --gauge понимают
+# ТОЛЬКО протокол gauge: число = процент, XXX/сообщение/XXX, маркеры
+# INSTALL_DONE/INSTALL_FAILED. Сырой вывод rsync им не нужен и туда
+# не идёт — поэтому rsync остаётся на переднем плане с тем же вызовом
+# (та же строка, та же проверка ошибки — см. T0a7 в test-installer-security.sh),
+# а рядом, в фоне, работает этот опросчик: он читает из $LOG свежие строки
+# progress2 (формат с --human-readable: `  41.94M  57%  689.12MB/s  0:00:00 ...`)
+# и печатает в stdout gauge-числа 30..60 и XXX-статус с размером
+# и скоростью в МБ/ГБ. Процент rsync — кумулятивный (байты уже
+# скопированные / всего), поэтому он монотонно растёт сам по себе:
+# сглаживание — это запрет на повтор/откат (печатаем только строго
+# большее значение), усреднять нечего. Опросчик глушится сразу после
+# rsync (kill+wait), а при обрыве — ловушкой EXIT/cleanup, как все
+# потомки движка. Если progress-строк нет (короткое копирование,
+# заглушка rsync в тестах) — опросчик молчит, gauge идёт 30 -> 70,
+# как раньше.
+# $1 — байтовое смещение в $LOG, с которого начался rsync.
+xros_rsync_gauge() {
+  local off="${1:-0}" last=30 pct=0 gauge=0 line="" size="" speed=""
+  while kill -0 "$PPID" 2>/dev/null; do
+    sleep 0.5
+    line=$(tail -c +"$((off + 1))" "$LOG" 2>/dev/null | tr '\r' '\n' \
+      | grep -E '^[[:space:]]*[0-9.]+[KMGT]?[[:space:]]+[0-9]+%[[:space:]]+[0-9.]+[kKMGT]?B/s' \
+      | tail -n 1 || true)
+    [[ -z "$line" ]] && continue
+    pct=$(printf '%s' "$line" | grep -oE '[0-9]+%' | head -n 1 | tr -d '%' || true)
+    [[ "$pct" =~ ^[0-9]+$ ]] || continue
+    (( pct > 100 )) && pct=100
+    gauge=$((30 + pct * 30 / 100))
+    (( gauge <= last )) && continue
+    last=$gauge
+    size=$(printf '%s' "$line" | awk '{print $1}')
+    speed=$(printf '%s' "$line" | awk '{print $3}')
+    echo "$gauge"
+    echo "XXX"
+    echo "Копирование системы: $pct% (скопировано $size, скорость $speed)"
+    echo "XXX"
+  done
+  return 0
+}
+
+# --- Пункт 10 (1.1): автоопределение железа и драйверы ---
+# Установщик определяет ЦП и видеокарту живой системы (то же железо,
+# что у цели: установка копирует систему на этот же компьютер) и
+# ставит подходящие пакеты в установленную систему через
+# arch-chroot pacman -S. Вызывается из run_install СРАЗУ после
+# копирования ядра и ДО grub-mkconfig: grub-mkconfig сам включает
+# /boot/intel-ucode.img и /boot/amd-ucode.img в grub.cfg, поэтому
+# микрокод должен лежать в /boot уже к моменту его запуска.
+#   ЦП: vendor_id из /proc/cpuinfo — GenuineIntel -> intel-ucode,
+#     AuthenticAMD -> amd-ucode; не распознан — ничего не ставится.
+#   GPU: lspci (VGA/3D controller) — NVIDIA -> nvidia-open +
+#     nvidia-utils, AMD -> mesa + vulkan-radeon (amdgpu в ядре),
+#     Intel -> mesa + vulkan-intel. Гибридная графика (Intel+NVIDIA)
+#     ставит оба стека. lspci нет — GPU пропускается; GPU не
+#     распознан (например, VMware/VirtualBox SVGA) — ничего не ставится.
+#   DE=none: консольная система — стек GPU не ставится, только микрокод
+#     (ветка none позже всё равно чистит графику).
+# NVIDIA: ставится nvidia-open, а не проприетарный nvidia. nvidia-open —
+# открытый kernel-модуль, рекомендованный Arch Wiki драйвером по
+# умолчанию для Turing (GTX 16xx, RTX 20xx) и новее, то есть для всех
+# карт, которые сейчас продаются и поддерживаются; проприетарный nvidia
+# нужен только для pre-Turing (GTX 10xx и старше). PCI ID в поколения
+# карт движок не отображает (таблица на сотни ID), поэтому ставится
+# nvidia-open, а владельцам старых карт журнал честно говорит заменить
+# его на nvidia.
+# Без сети установка пакетов невозможна — шаг тихо пропускается
+# с предупреждением, установка НЕ падает. Ошибка pacman -S тоже
+# не роняет установку: драйверы можно доустановить позже.
+xros_install_hw_drivers() {
+  local cpu_vendor="" ucode_pkg="" hw_pkgs="" gpu_info=""
+  local has_nvidia=0 has_amd=0 has_intel=0
+  cpu_vendor=$(grep -m1 '^vendor_id' /proc/cpuinfo 2>/dev/null | awk '{print $3}' || true)
+  case "$cpu_vendor" in
+    GenuineIntel) ucode_pkg="intel-ucode" ;;
+    AuthenticAMD) ucode_pkg="amd-ucode" ;;
+    *) say "ЦП не распознан (vendor_id=${cpu_vendor:-неизвестен}) — микрокод не ставится" ;;
+  esac
+  if command -v lspci >/dev/null 2>&1; then
+    gpu_info=$(lspci -nn 2>/dev/null | grep -iE 'VGA compatible controller|3D controller' || true)
+    case "$gpu_info" in *NVIDIA*) has_nvidia=1 ;; esac
+    case "$gpu_info" in *Advanced\ Micro\ Devices*|*AMD*) has_amd=1 ;; esac
+    case "$gpu_info" in *Intel*) has_intel=1 ;; esac
+  else
+    say "ВНИМАНИЕ: нет утилиты lspci — видеокарта не определена, драйверы GPU не ставятся"
+  fi
+  # DE=none: консольная система — графический стек не ставится, только
+  # микрокод (ветка none позже всё равно чистит графику). Проверка —
+  # через одиночное `=`: строка проверки none — маркер, по которому
+  # test-de-none.sh извлекает ветку none, а метка none) — маркер
+  # case_line; дублировать их вне ветки нельзя (иначе извлечение
+  # начнётся с этой функции).
+  if [[ "$DE" = "none" ]]; then
+    say "Без графики (DE=none): драйверы GPU не ставятся, только микрокод ЦП"
+    has_nvidia=0; has_amd=0; has_intel=0
+  fi
+  hw_pkgs="$ucode_pkg"
+  if (( has_nvidia == 1 )); then
+    hw_pkgs="$hw_pkgs nvidia-open nvidia-utils"
+    say "NVIDIA: ставится nvidia-open (Turing и новее); для карт GTX 10xx и старше замените на проприетарный nvidia: pacman -S nvidia nvidia-utils"
+  fi
+  if (( has_amd == 1 )); then hw_pkgs="$hw_pkgs mesa vulkan-radeon"; fi
+  if (( has_intel == 1 )); then hw_pkgs="$hw_pkgs mesa vulkan-intel"; fi
+  hw_pkgs="${hw_pkgs# }"
+  if [[ -z "$hw_pkgs" ]]; then
+    say "Драйверы железа не требуются (ЦП и GPU не опознаны) — ничего не ставится"
+    return 0
+  fi
+  say "Железо: ЦП ${cpu_vendor:-неизвестен}, GPU nvidia=$has_nvidia amd=$has_amd intel=$has_intel — ставлю в установленную систему: $hw_pkgs"
+  if ! arch-chroot "$TARGET" pacman -Sy --noconfirm >>"$LOG" 2>&1; then
+    say "ВНИМАНИЕ: драйверы железа ($hw_pkgs) не установлены — нет сети или недоступны зеркала (pacman -Sy не удался); доустановить позже: pacman -S $hw_pkgs"
+    return 0
+  fi
+  # shellcheck disable=SC2086
+  if arch-chroot "$TARGET" pacman -S --noconfirm --needed $hw_pkgs >>"$LOG" 2>&1; then
+    say "Драйверы железа установлены: $hw_pkgs"
+  else
+    say "ВНИМАНИЕ: драйверы железа ($hw_pkgs) установлены не полностью (см. $LOG); доустановить позже: pacman -S $hw_pkgs"
+  fi
+  return 0
 }
 
 # --- Выбор значений: диалоги или конфиг GUI ---
@@ -366,9 +990,6 @@ if [[ -n "$NONINTERACTIVE" ]]; then
   : "${OFFICE:=none}"
   : "${DE:=kde}"
   : "${FULLNAME:=${USERNAME:-xros}}"
-  : "${USERNAME:=xros}"
-  : "${USERPASS:=xros}"
-  : "${ROOTPASS:=$USERPASS}"
   [[ -n "${DISK:-}" || -n "${ROOT_PART:-}" ]] || { say "ОШИБКА: не задан диск/раздел"; exit 1; }
   [[ -n "${USERNAME:-}" && -n "${USERPASS:-}" ]] || { say "ОШИБКА: не заданы пользователь/пароль"; exit 1; }
   [[ -n "${ROOTPASS:-}" ]] || ROOTPASS="$USERPASS"
@@ -376,6 +997,8 @@ if [[ -n "$NONINTERACTIVE" ]]; then
   [[ -n "$USERNAME" ]] || USERNAME="xros"
   # useradd не принимает имя, начинающееся с цифры.
   [[ "$USERNAME" =~ ^[a-z_][a-z0-9_]*$ ]] || USERNAME="u$USERNAME"
+  # A-31: зарезервированное имя — жёсткий стоп до разметки.
+  if xros_reserved_user "$USERNAME"; then say "ОШИБКА: имя пользователя '$USERNAME' зарезервировано системой (системный пользователь) — выберите другое"; exit 1; fi
   [[ -n "${HOSTNAME:-}" ]] || HOSTNAME="xros-os"
   # Имя компьютера — только безопасные символы: иначе перевод строки
   # или пробелы из GUI сломали бы /etc/hostname и /etc/hosts.
@@ -517,20 +1140,29 @@ else
   # (в неинтерактивном режиме та же чистка есть с первого аудита).
   HOSTNAME=$(printf '%s' "$HOSTNAME" | tr -cd 'a-zA-Z0-9.-')
   [[ -n "$HOSTNAME" ]] || HOSTNAME="xros-os"
-  USERNAME=$(dialog --backtitle "$BACKTITLE" --title "$TITLE" --inputbox "Имя пользователя (латиница, без пробелов):" 9 50 "xros" 2>&1 >/dev/tty)
-  [[ -n "$USERNAME" ]] || USERNAME="xros"
-  USERNAME=$(echo "$USERNAME" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_')
-  [[ -n "$USERNAME" ]] || USERNAME="xros"
-  # useradd не принимает имя, начинающееся с цифры.
-  [[ "$USERNAME" =~ ^[a-z_][a-z0-9_]*$ ]] || USERNAME="u$USERNAME"
+  # A-31: имя пользователя — в цикле: зарезервированное системное имя
+  # отклоняется с объяснением, а не падает молча (см. xros_reserved_user).
+  while true; do
+    USERNAME=$(dialog --backtitle "$BACKTITLE" --title "$TITLE" --inputbox "Имя пользователя (латиница, без пробелов):" 9 50 "xros" 2>&1 >/dev/tty)
+    [[ -n "$USERNAME" ]] || USERNAME="xros"
+    USERNAME=$(echo "$USERNAME" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_')
+    [[ -n "$USERNAME" ]] || USERNAME="xros"
+    # useradd не принимает имя, начинающееся с цифры.
+    [[ "$USERNAME" =~ ^[a-z_][a-z0-9_]*$ ]] || USERNAME="u$USERNAME"
+    if xros_reserved_user "$USERNAME"; then
+      dialog --backtitle "$BACKTITLE" --title "$TITLE" --msgbox "Имя '$USERNAME' зарезервировано системой (системный пользователь). Выберите другое имя." 8 55
+      continue
+    fi
+    break
+  done
   FULLNAME="$USERNAME"
   while true; do
-    USERPASS=$(dialog --backtitle "$BACKTITLE" --title "$TITLE" --insecure --passwordbox "Пароль пользователя $USERNAME:" 9 50 2>&1 >/dev/tty)
-    USERPASS2=$(dialog --backtitle "$BACKTITLE" --title "$TITLE" --insecure --passwordbox "Повторите пароль:" 9 50 2>&1 >/dev/tty)
+    USERPASS=$(dialog --backtitle "$BACKTITLE" --title "$TITLE" --passwordbox "Пароль пользователя $USERNAME:" 9 50 2>&1 >/dev/tty)
+    USERPASS2=$(dialog --backtitle "$BACKTITLE" --title "$TITLE" --passwordbox "Повторите пароль:" 9 50 2>&1 >/dev/tty)
     [[ "$USERPASS" == "$USERPASS2" && -n "$USERPASS" ]] && break
     dialog --backtitle "$BACKTITLE" --title "$TITLE" --msgbox "Пароли не совпадают или пустые. Попробуйте ещё раз." 8 55
   done
-  ROOTPASS=$(dialog --backtitle "$BACKTITLE" --title "$TITLE" --insecure --passwordbox "Пароль root (пусто = такой же, как у пользователя):" 9 50 2>&1 >/dev/tty)
+  ROOTPASS=$(dialog --backtitle "$BACKTITLE" --title "$TITLE" --passwordbox "Пароль root (пусто = такой же, как у пользователя):" 9 50 2>&1 >/dev/tty)
   [[ -n "$ROOTPASS" ]] || ROOTPASS="$USERPASS"
   AUTOLOGIN=0
   OFFICE="none"
@@ -688,10 +1320,31 @@ run_install() {
     # Разделы не должны быть смонтированы (живая система, ISO-носитель).
     if xros_has_mounts "$ROOT_PART"; then say "ОШИБКА: корневой раздел $ROOT_PART смонтирован в живой системе — отмонтируйте его и повторите"; exit 1; fi
     if [[ -n "${EFI_PART:-}" ]] && xros_has_mounts "$EFI_PART"; then say "ОШИБКА: EFI-раздел $EFI_PART смонтирован в живой системе — отмонтируйте его и повторите"; exit 1; fi
+    # A-18: корневой раздел — минимум 10 ГБ (система ~4–6 ГБ + место
+    # под пользователя). Проверка ДО форматирования.
+    ROOT_BYTES="$(lsblk -n -b -o SIZE "$ROOT_PART" 2>/dev/null || echo 0)"
+    if [[ "${ROOT_BYTES:-0}" -lt 10737418240 ]]; then
+      say "ОШИБКА: корневой раздел $ROOT_PART слишком мал: $((ROOT_BYTES / 1024 / 1024)) МБ, нужно минимум 10240 МБ (10 ГБ)"
+      exit 1
+    fi
+    # A-24: LVM/LUKS/RAID на корневом разделе — стоп до mkfs.
+    if ! xros_require_disk_free "$ROOT_PART"; then exit 1; fi
+    # A-19: явное предупреждение до форматирования: отмена после
+    # этого шага = переустановка с нуля.
+    say "ВНИМАНИЕ: сейчас будет отформатирован раздел $ROOT_PART — ВСЕ данные на нём будут уничтожены. Отмена после этого шага = переустановка с нуля."
     mkfs_root "$ROOT_PART" "${FS:-ext4}" || { say "ОШИБКА: не удалось отформатировать $ROOT_PART (${FS:-ext4}) — см. $LOG"; exit 1; }
   else
     say "Разметка $DISK (фс: ${FS:-ext4})"
     [[ -b "${DISK:-}" ]] || { say "ОШИБКА: диск $DISK не найден"; exit 1; }
+    # A-18: диск — минимум 10 ГБ (система ~4–6 ГБ + место под
+    # пользователя). Проверка ДО разметки.
+    DISK_BYTES="$(lsblk -n -b -o SIZE "$DISK" 2>/dev/null || echo 0)"
+    if [[ "${DISK_BYTES:-0}" -lt 10737418240 ]]; then
+      say "ОШИБКА: диск $DISK слишком мал: $((DISK_BYTES / 1024 / 1024)) МБ, нужно минимум 10240 МБ (10 ГБ)"
+      exit 1
+    fi
+    # A-24: LVM/LUKS/RAID на диске — стоп до wipefs.
+    if ! xros_require_disk_free "$DISK"; then exit 1; fi
     umount -R "$TARGET" 2>/dev/null || true
     # Если $TARGET всё ещё смонтирован (занят процессом) — стоп до
     # разрушения: иначе разметка пошла бы по смонтированному диску.
@@ -717,6 +1370,19 @@ run_install() {
       say "ОШИБКА: на диске $DISK есть смонтированные разделы — отмонтируйте их и повторите (возможно, это диск с ISO)"
       exit 1
     fi
+    # A-19: явное предупреждение до стирания: после начала разметки
+    # отмена = переустановка с нуля (данные не восстановить).
+    say "ВНИМАНИЕ: сейчас начнётся стирание диска $DISK — ВСЕ данные на нём будут уничтожены. Отмена после этого шага = переустановка с нуля."
+    # A-38: повторная проверка непосредственно перед wipefs: диск мог
+    # измениться между первой проверкой и стиранием.
+    # R-05 (остаточный риск TOCTOU, документирован): между этой проверкой
+    # и wipefs/sgdisk устройство не блокируется — flock не закрывает
+    # гонку, т.к. wipefs/sgdisk/mkfs блокировку не соблюдают, а
+    # переподключение диска во время установки — внешнее событие.
+    # Окно — миллисекунды; mkfs дополнительно перепроверяется внутри
+    # mkfs_root. Надёжное устранение потребовало бы изменения
+    # архитектуры (блокировка на уровне ядра/udev) и не делается здесь.
+    if ! xros_require_disk_free "$DISK"; then exit 1; fi
     # wipefs без проверки: его падение не фатально — таблицу разделов
     # всё равно перепишет sgdisk ниже, а его ошибка уже жёсткая.
     wipefs -a "$DISK" 2>/dev/null || true
@@ -725,16 +1391,28 @@ run_install() {
       sgdisk --zap-all "$DISK" >>"$LOG" 2>&1 || { say "ОШИБКА: sgdisk --zap-all не удался для $DISK — см. $LOG"; exit 1; }
       sgdisk -n 1:0:+512M -t 1:ef00 -c 1:"EFI" \
              -n 2:0:0     -t 2:8300 -c 2:"XROS-ROOT" "$DISK" >>"$LOG" 2>&1 || { say "ОШИБКА: не удалось создать разделы на $DISK — см. $LOG"; exit 1; }
-      partprobe "$DISK" 2>/dev/null || true; sleep 1
+      # A-25: partprobe + udevadm settle + ожидание узлов (вместо sleep 1).
+      xros_wait_part "$DISK" "${DISK}p1" "${DISK}1"
       if [[ -b "${DISK}p1" ]]; then EFI_PART="${DISK}p1"; ROOT_PART="${DISK}p2";
       else EFI_PART="${DISK}1"; ROOT_PART="${DISK}2"; fi
+      # R-19 (A-38): повторная проверка EFI-раздела непосредственно перед
+      # mkfs.fat. Узел создан sgdisk секунды назад, но таблица могла не
+      # перечитаться ядром (устаревший узел старого раздела), а устройство
+      # — измениться между проверкой диска и форматированием
+      # (переподключение/переименование). Без проверки mkfs.fat
+      # отформатировал бы любой узел по этому пути, включая член RAID.
+      # Проверка читает сигнатуры устройства (lsblk + blkid + проба
+      # чтения), а не только его имя; любой провал — отказ, без fallback
+      # на другой раздел.
+      if ! xros_require_disk_free "$EFI_PART"; then say "ОШИБКА: EFI-раздел $EFI_PART не прошёл повторную проверку перед форматированием (R-19) — установка прервана, диск не тронут"; exit 1; fi
       mkfs.fat -F 32 -n XROS-EFI "$EFI_PART" >>"$LOG" 2>&1 || { say "ОШИБКА: не удалось отформатировать EFI-раздел $EFI_PART — см. $LOG"; exit 1; }
     else
       UEFI=0
       sgdisk --zap-all "$DISK" >>"$LOG" 2>&1 || { say "ОШИБКА: sgdisk --zap-all не удался для $DISK — см. $LOG"; exit 1; }
       sgdisk -n 1:0:+1M -t 1:ef02 -c 1:"BIOS-BOOT" \
              -n 2:0:0  -t 2:8300 -c 2:"XROS-ROOT" "$DISK" >>"$LOG" 2>&1 || { say "ОШИБКА: не удалось создать разделы на $DISK — см. $LOG"; exit 1; }
-      partprobe "$DISK" 2>/dev/null || true; sleep 1
+      # A-25: partprobe + udevadm settle + ожидание узлов (вместо sleep 1).
+      xros_wait_part "$DISK" "${DISK}p2" "${DISK}2"
       if [[ -b "${DISK}p2" ]]; then ROOT_PART="${DISK}p2"; else ROOT_PART="${DISK}2"; fi
     fi
     mkfs_root "$ROOT_PART" "${FS:-ext4}" || { say "ОШИБКА: не удалось отформатировать $ROOT_PART (${FS:-ext4}) — см. $LOG"; exit 1; }
@@ -746,11 +1424,20 @@ run_install() {
   mount "$ROOT_PART" "$TARGET" || { say "ОШИБКА: не удалось смонтировать $ROOT_PART в $TARGET"; exit 1; }
   if [[ $UEFI -eq 1 ]]; then mkdir -p "$TARGET/boot/efi"; mount "$EFI_PART" "$TARGET/boot/efi" || { say "ОШИБКА: не удалось смонтировать $EFI_PART в $TARGET/boot/efi"; exit 1; }; fi
   say "Копирование живой системы (это займёт 1–3 минуты)..."
-  rsync -aAX --info=progress2 --exclude='/dev/*' --exclude='/proc/*' --exclude='/sys/*' \
+  # Пункт 4 (1.1): живой прогресс копирования — см. xros_rsync_gauge.
+  # Смещение в журнале — до старта rsync: опросчик читает только
+  # свежие строки progress2, а не весь журнал с начала установки.
+  # --human-readable: размеры и скорость в МБ/ГБ, а не в байтах.
+  XROS_LOG_OFF=$(stat -c %s "$LOG" 2>/dev/null || echo 0)
+  xros_rsync_gauge "$XROS_LOG_OFF" &
+  XROS_RSYNC_GAUGE_PID=$!
+  rsync -aAX --info=progress2 --human-readable --exclude='/dev/*' --exclude='/proc/*' --exclude='/sys/*' \
     --exclude='/tmp/*' --exclude='/run/*' --exclude='/mnt/*' --exclude='/media/*' \
     --exclude='/lost+found' --exclude='/var/cache/pacman/pkg/*' --exclude='/var/log/journal/*' \
     --exclude='/etc/ssh/ssh_host_*' --exclude='/etc/pacman.d/gnupg/*' \
     / "$TARGET"/ >>"$LOG" 2>&1 || { say "ОШИБКА: копирование живой системы не удалось — см. $LOG"; exit 1; }
+  kill "$XROS_RSYNC_GAUGE_PID" 2>/dev/null || true
+  wait "$XROS_RSYNC_GAUGE_PID" 2>/dev/null || true
 
   # Корень установленной системы — 0755 (fixed10, Этап 2): rsync -aAX
   # переносит режим корня живой системы (в ISO он 555); ставим явно.
@@ -761,6 +1448,72 @@ run_install() {
   # копируется rsync'ом — заменяем текстом установленной системы.
   printf '%s\n' 'Добро пожаловать в XrOS 1.0 — установленная система на базе Arch Linux.' > "$TARGET/etc/motd" \
     || say "ВНИМАНИЕ: не удалось записать /etc/motd установленной системы"
+
+  # Пункт 9 (1.1): личность УСТАНОВЛЕННОЙ системы. rsync копирует
+  # живую систему как есть, поэтому в цель попадают живые маркеры:
+  # /etc/issue «XrOS 1.0 — живая система» и /usr/lib/os-release
+  # живой системы (его же mtime — дата сборки ISO: rsync -a
+  # сохраняет время файлов). Перезаписываем их текстом установленной
+  # системы — без слова «живая» и без даты сборки ISO, только версия
+  # XrOS 1.0. Проверено: в живом os-release (customize_airootfs.sh)
+  # поля с датой нет (BUILD_ID=1.0) — дата видна именно как время
+  # файлов и текст issue, и оба источника здесь закрываются.
+  # /etc/issue: `\n` — escape getty, подставляет hostname пользователя
+  # (пишется ниже из $HOSTNAME), поэтому консольный логин показывает
+  # имя компьютера, а не «живая система».
+  printf '%s\n' 'XrOS 1.0 (\n)' > "$TARGET/etc/issue" \
+    || say "ВНИМАНИЕ: не удалось записать /etc/issue установленной системы"
+  # os-release: те же поля версии, что в живой системе, плюс
+  # VARIANT_ID=installed — штатный маркер os-release(5) для отличия
+  # установленной системы от живой (hostnamectl его показывает).
+  # PLACEHOLDER: URL https://xros.example/ — домен не существует,
+  # заменить на настоящий при публикации (как в живом os-release).
+  # /etc/os-release — ссылка на /usr/lib/os-release, как в живой
+  # системе; пересоздаём её явно, чтобы она не указывала в никуда.
+  cat > "$TARGET/usr/lib/os-release" <<'OS_EOF' \
+    || say "ВНИМАНИЕ: не удалось записать /usr/lib/os-release установленной системы"
+NAME="XrOS"
+PRETTY_NAME="XrOS 1.0"
+ID=xros
+ID_LIKE=arch
+BUILD_ID=1.0
+VERSION="1.0"
+VERSION_ID="1.0"
+VARIANT="Installed system"
+VARIANT_ID=installed
+ANSI_COLOR="38;2;139;0;255"
+# PLACEHOLDER: URL https://xros.example/ — домен не существует, заменить на настоящий при публикации.
+HOME_URL="https://xros.example/"
+DOCUMENTATION_URL="https://xros.example/"
+SUPPORT_URL="https://xros.example/"
+BUG_REPORT_URL="https://xros.example/"
+LOGO=xros
+IMAGE_ID=xros
+IMAGE_VERSION=1.0
+OS_EOF
+  ln -sf /usr/lib/os-release "$TARGET/etc/os-release" \
+    || say "ВНИМАНИЕ: не удалось создать ссылку /etc/os-release установленной системы"
+
+  # A-04: ключи pacman в установленной системе. rsync выше исключает
+  # /etc/pacman.d/gnupg/*, поэтому без --init/--populate pacman -S
+  # в chroot ниже падает с ошибкой подписи.
+  # R-07: неудача --init или --populate — ФАТАЛЬНАЯ ошибка установки.
+  # Продолжать без инициализированного keyring нельзя: система
+  # выглядела бы установленной, но проверка подписей пакетов
+  # (в том числе pacman -S ниже) не работала бы. Пакеты gnupg и
+  # archlinux-keyring явно есть в живой системе (R-06, они же
+  # попадают в цель через rsync), поэтому на корректно собранном
+  # образе эти команды обязаны succeed; их падение — признак
+  # сломанного образа, а не штатная ситуация.
+  say "Инициализация ключей pacman в установленной системе"
+  arch-chroot "$TARGET" pacman-key --init >>"$LOG" 2>&1 \
+    || { say "ОШИБКА: pacman-key --init не удался в установленной системе — keyring не инициализирован, проверка подписей пакетов невозможна, установка прервана (R-07) — см. $LOG"; exit 1; }
+  arch-chroot "$TARGET" pacman-key --populate archlinux >>"$LOG" 2>&1 \
+    || { say "ОШИБКА: pacman-key --populate archlinux не удался в установленной системе — ключи Arch не загружены, проверка подписей пакетов невозможна, установка прервана (R-07) — см. $LOG"; exit 1; }
+
+  # A-40: production-ключ XrOS в keyring установленной системы.
+  # Ошибка импорта/проверки останавливает установку до pacman -S.
+  xros_import_xros_key || exit 1
 
   # ВАЖНО: в живой системе archiso ядро и initramfs НЕ лежат в /boot —
   # сборщик выносит их на сам ISO (/xros/boot/x86_64/), а /boot в живой
@@ -781,6 +1534,10 @@ run_install() {
   cp "$KERN_SRC/initramfs-linux-fallback.img" "$TARGET/boot/" 2>/dev/null || true
   say "Ядро скопировано: $(ls -lh "$TARGET/boot/vmlinuz-linux" | awk '{print $5}')"
 
+  # Пункт 10 (1.1): драйверы железа — до grub-mkconfig (см. xros_install_hw_drivers).
+  echo "63"; echo "XXX"; echo "Определение оборудования и установка драйверов..."; echo "XXX"
+  xros_install_hw_drivers
+
   echo "70"; echo "XXX"; echo "Настройка установленной системы..."; echo "XXX"
   say "fstab"
   mkdir -p "$TARGET/etc"
@@ -799,6 +1556,27 @@ run_install() {
   rm -f "$TARGET/etc/xdg/autostart/xros-welcome.desktop"
   rm -rf "$TARGET/etc/systemd/user/xros-welcome.service"
   rm -f "$TARGET/etc/systemd/user/graphical-session.target.wants/xros-welcome.service"
+  # Пункт 8 (1.1): приветствие — только в живой системе. Автостарт
+  # (.desktop выше) удалялся и раньше, но само приложение (бинарь +
+  # пункт меню) оставалось в установленной системе при любом DE,
+  # кроме none: ветка none убирала его отдельно (см. ниже), а KDE/
+  # GNOME/XFCE и остальные — нет. Оставшийся бинарь — живая точка
+  # возврата автозапуска: его переключатель «Запускать при старте»
+  # пишет ~/.config/autostart/xros-welcome.desktop, а пункт меню
+  # позволяет запустить его вручную. Поэтому для ВСЕХ DE убираем
+  # и приложение: бинарь, оба .desktop и байткод. Консольное меню
+  # xros-welcome (dialog, tty1) НЕ трогаем: оно работает и без графики.
+  # /etc/skel — шаблон домашнего каталога каждого нового пользователя:
+  # застрявший там autostart достался бы всем пользователям;
+  # /root/.config/autostart — то же для root (дом /root копируется rsync'ом).
+  # systemd user service в профиле отсутствует (модель autostart-only),
+  # но удаление остаётся страховкой — и для default.target.wants.
+  rm -f "$TARGET/usr/local/bin/xros-welcome-gui"
+  rm -f "$TARGET/usr/share/applications/xros-welcome.desktop"
+  rm -f "$TARGET"/usr/local/bin/__pycache__/xros-welcome-gui*.pyc
+  rm -f "$TARGET/etc/skel/.config/autostart/xros-welcome.desktop"
+  rm -f "$TARGET/root/.config/autostart/xros-welcome.desktop"
+  rm -f "$TARGET/etc/systemd/user/default.target.wants/xros-welcome.service"
   rm -f "$TARGET/root/Desktop/xros-install.desktop"
   rm -f "$TARGET/root/customize_airootfs.sh" "$TARGET/root/wtest"
   rm -f "$TARGET"/etc/ssh/ssh_host_*
@@ -913,8 +1691,18 @@ CHROOT_EOF
     # KDE уже есть в живой системе — копируется вместе с ней,
     # интернет для этого не нужен. Включаем SDDM.
     say "KDE Plasma уже установлена (из живой системы), включаю SDDM"
-    arch-chroot "$TARGET" systemctl enable sddm.service >>"$LOG" 2>&1 || true
-    arch-chroot "$TARGET" systemctl set-default graphical.target >>"$LOG" 2>&1 || true
+    # P4-AUD-02 V-01: проверить владельца alias ДО любых изменений.
+    xros_check_dm_alias
+    # P4-AUD-02: ровно один менеджер входа — конкурирующие DM
+    # отключаем (если они есть в системе); выбранный SDDM не трогаем.
+    for dm in sddm lightdm gdm; do
+      [ "$dm" = "$DE_DM" ] && continue
+      xros_disable_dm "$dm.service"
+    done
+    arch-chroot "$TARGET" systemctl enable sddm.service >>"$LOG" 2>&1 \
+      || { say "ОШИБКА: не удалось включить SDDM в установленной системе — графический вход не будет работать (см. $LOG)"; exit 1; }
+    arch-chroot "$TARGET" systemctl set-default graphical.target >>"$LOG" 2>&1 \
+      || { say "ОШИБКА: не удалось задать graphical.target по умолчанию в установленной системе — система загрузится в консоль (см. $LOG)"; exit 1; }
     DE_RESULT="KDE Plasma"
     DE_OK=1
   elif [[ "$DE" == "none" ]]; then
@@ -922,10 +1710,16 @@ CHROOT_EOF
     # 1. Все менеджеры входа — выкл, цель по умолчанию — консоль.
     #    Без set-default система грузилась бы в graphical.target
     #    (цель живой системы) и ждала бы display-manager.service.
-    arch-chroot "$TARGET" systemctl disable sddm.service >>"$LOG" 2>&1 || true
-    arch-chroot "$TARGET" systemctl disable lightdm.service >>"$LOG" 2>&1 || true
-    arch-chroot "$TARGET" systemctl disable gdm.service >>"$LOG" 2>&1 || true
-    arch-chroot "$TARGET" systemctl set-default multi-user.target >>"$LOG" 2>&1 || true
+    # P4-AUD-02: fail-closed для существующих DM; отсутствующие
+    # пропускаются. DE_DM пуст — цикл никого не пропускает.
+    for dm in sddm lightdm gdm; do
+      [ "$dm" = "$DE_DM" ] && continue
+      xros_disable_dm "$dm.service"
+    done
+    # P4-AUD-04 FIX-B (V-09): fail-closed для set-default; проглатывание
+    # ошибки (|| true) убрано, добавлена финальная проверка default target.
+    arch-chroot "$TARGET" systemctl set-default multi-user.target >>"$LOG" 2>&1 \
+      || { say "ОШИБКА: не удалось установить multi-user.target как цель по умолчанию в установленной системе (см. $LOG)"; exit 1; }
     # 2. Удаляем графику точным списком. pacman -Rns падает целиком,
     #    если хоть один пакет из списка не установлен, поэтому сначала
     #    фильтруем список до установленных (pacman -Qq).
@@ -959,7 +1753,10 @@ CHROOT_EOF
     #    его GUI-скрипт — мёртвый груз, убираем файл вместе с лаунчером
     #    из меню приложений и скомпилированным байткодом (__pycache__:
     #    иначе в консольной системе остаётся ссылка на несуществующий
-    #    /usr/local/bin/xros-welcome-gui). Консольное меню
+    #    /usr/local/bin/xros-welcome-gui). Пункт 8 (1.1): то же удаление
+    #    теперь делается для ВСЕХ DE в общем блоке «убрать живые следы»
+    #    выше; здесь строки оставлены страховкой ветки none (и их
+    #    требует test-de-none.sh). Консольное меню
     #    xros-welcome (dialog, tty1) НЕ трогаем: оно работает и без графики.
     rm -f "$TARGET/usr/local/bin/xros-welcome-gui"
     rm -f "$TARGET/usr/share/applications/xros-welcome.desktop"
@@ -992,32 +1789,76 @@ CHROOT_EOF
     fi
   else
     say "Графическая оболочка: $DE_NAME ($DE_PKGS), менеджер входа: $DE_DM"
-    if arch-chroot "$TARGET" pacman -Sy --noconfirm >>"$LOG" 2>&1 && arch-chroot "$TARGET" pacman -S --noconfirm --needed $DE_PKGS >>"$LOG" 2>&1; then
+    # A-04: -Sy и -S раздельно: падение -Sy = сеть/зеркала, падение
+    # -S с подписью в выводе = подпись, иначе — общая ошибка pacman.
+    # Вывод -S — в отдельный файл, чтобы проверка подписи не ловила
+    # старые строки из общего журнала (он же дописывается в $LOG).
+    DE_ERR_LOG="$(mktemp /tmp/xros-de-install.XXXXXX 2>/dev/null)" || DE_ERR_LOG="$LOG"
+    DE_SYNC_OK=0
+    DE_INSTALL_OK=0
+    if arch-chroot "$TARGET" pacman -Sy --noconfirm >>"$LOG" 2>&1; then
+      DE_SYNC_OK=1
+      if arch-chroot "$TARGET" pacman -S --noconfirm --needed $DE_PKGS >"$DE_ERR_LOG" 2>&1; then
+        DE_INSTALL_OK=1
+      fi
+      [[ "$DE_ERR_LOG" != "$LOG" ]] && cat "$DE_ERR_LOG" >> "$LOG"
+    fi
+    if [[ "$DE_INSTALL_OK" -eq 1 ]]; then
       # Включаем ровно один менеджер входа: раньше для GNOME
       # отключался только lightdm, а SDDM оставался включённым —
       # оба висели на display-manager.service и дрались за tty1.
-      arch-chroot "$TARGET" systemctl disable sddm.service >>"$LOG" 2>&1 || true
-      arch-chroot "$TARGET" systemctl disable lightdm.service >>"$LOG" 2>&1 || true
-      arch-chroot "$TARGET" systemctl disable gdm.service >>"$LOG" 2>&1 || true
-      arch-chroot "$TARGET" systemctl enable "$DE_DM.service" >>"$LOG" 2>&1 || true
-      arch-chroot "$TARGET" systemctl set-default graphical.target >>"$LOG" 2>&1 || true
+      # P4-AUD-02: отключаем только конкурирующие DM (выбранный
+      # $DE_DM не трогаем — его включает следующая команда).
+      # P4-AUD-02 V-01: проверить владельца alias ДО любых изменений.
+      xros_check_dm_alias
+      for dm in sddm lightdm gdm; do
+        [ "$dm" = "$DE_DM" ] && continue
+        xros_disable_dm "$dm.service"
+      done
+      arch-chroot "$TARGET" systemctl enable "$DE_DM.service" >>"$LOG" 2>&1 \
+        || { say "ОШИБКА: не удалось включить менеджер входа $DE_DM в установленной системе — графический вход не будет работать (см. $LOG)"; exit 1; }
+      arch-chroot "$TARGET" systemctl set-default graphical.target >>"$LOG" 2>&1 \
+        || { say "ОШИБКА: не удалось задать graphical.target по умолчанию в установленной системе — система загрузится в консоль (см. $LOG)"; exit 1; }
       say "Оболочка $DE_NAME установлена, включён $DE_DM"
       DE_OK=1
+    elif [[ "$DE_SYNC_OK" -eq 0 ]]; then
+      say "ВНИМАНИЕ: оболочку $DE_NAME установить не удалось — нет сети или недоступны зеркала (pacman -Sy не удался, см. $LOG); остаётся KDE Plasma из живой системы; доустановить позже: pacman -S $DE_PKGS"
+      DE_RESULT="$DE_NAME — не установлена (нет сети), осталась KDE Plasma"
+    elif grep -qiE 'signature|invalid or corrupted|недействител|поврежд[её]н' "$DE_ERR_LOG"; then
+      say "ВНИМАНИЕ: оболочку $DE_NAME установить не удалось — ошибка проверки подписи пакетов (см. $LOG); остаётся KDE Plasma из живой системы; проверьте ключи (pacman-key --populate archlinux) и доустановите позже: pacman -S $DE_PKGS"
+      DE_RESULT="$DE_NAME — не установлена (ошибка подписи), осталась KDE Plasma"
     else
-      say "ВНИМАНИЕ: оболочку $DE_NAME установить не удалось (нет интернета или ошибка pacman) — остаётся KDE Plasma из живой системы; доустановить позже: pacman -S $DE_PKGS"
-      DE_RESULT="$DE_NAME — не установлена (нет интернета), осталась KDE Plasma"
+      say "ВНИМАНИЕ: оболочку $DE_NAME установить не удалось (ошибка pacman -S, см. $LOG) — остаётся KDE Plasma из живой системы; доустановить позже: pacman -S $DE_PKGS"
+      DE_RESULT="$DE_NAME — не установлена (ошибка pacman), осталась KDE Plasma"
     fi
+    [[ "$DE_ERR_LOG" != "$LOG" ]] && rm -f "$DE_ERR_LOG"
   fi
   echo "$DE_RESULT" > /tmp/xros-de-result
 
-  # Автообновления XrOS: намеренно НЕ включаем xros-update.timer.
-  # Репозиторий [xros] не подписан (SigLevel Optional TrustAll),
-  # а сервер xros.example — PLACEHOLDER без действующего адреса:
-  # автообновление с неподписанного/несуществующего источника —
-  # дыра. Юниты таймера есть в пакете xros-cli, но остаются
-  # выключенными; обновления — вручную: `pacman -Syu` /
-  # `sudo xros upgrade`. Включение таймера — отдельным шагом
-  # после публикации и GPG-подписи [xros] (см. repo/README.md).
+  # Пункт 7 (1.1): автообновление XrOS — новые юниты xros-auto-update.*.
+  # Старые юниты xros-update.* из пакета xros-cli НЕ включаются никогда:
+  # они остаются инертными. Новые включаются ТОЛЬКО если репозиторий
+  # [xros] подписан (см. xros_xros_repo_signed: production-ключ настроен
+  # И SigLevel для [xros] равен Required). Иначе таймер не включается,
+  # а в журнал пишется причина: автообновление из неподписанного
+  # источника запрещено (docs/REPO-PUBLISHING.md §2.6).
+  # С 2026-11-15 [xros] подписан production-ключом (SigLevel Required) —
+  # таймер включается, когда гейт xros_xros_repo_signed проходит.
+  # Если репозиторий не подписан, таймер не включается, обновления —
+  # вручную: `pacman -Syu` / `sudo xros upgrade`. Сбой включения при
+  # подписанном репозитории — предупреждение, а не падение установки:
+  # таймер не критичен для загрузки, а система при этом установлена корректно.
+  if xros_xros_repo_signed; then
+    if [[ -f "$TARGET/etc/systemd/system/xros-auto-update.timer" && -f "$TARGET/etc/systemd/system/xros-auto-update.service" ]]; then
+      arch-chroot "$TARGET" systemctl enable xros-auto-update.timer >>"$LOG" 2>&1 \
+        && say "Автообновление XrOS включено (xros-auto-update.timer): репозиторий [xros] подписан" \
+        || say "ВНИМАНИЕ: не удалось включить xros-auto-update.timer в установленной системе — автообновление не будет работать (см. $LOG)"
+    else
+      say "ВНИМАНИЕ: репозиторий [xros] подписан, но юниты xros-auto-update.* отсутствуют в установленной системе — таймер не включён"
+    fi
+  else
+    say "Автообновление XrOS отключено: репозиторий [xros] не подписан (нужны production-ключ и SigLevel = Required для [xros]) — таймер xros-auto-update.timer не включён; обновления — вручную: pacman -Syu"
+  fi
 
   # Офисный пакет (только из GUI; без интернета — пропускается молча).
   # DE=none: LibreOffice и Okular — графические приложения, они тянут
@@ -1074,6 +1915,12 @@ CHROOT_EOF
   # в chroot (pacman для других DE и офиса): без него в chroot нет DNS,
   # и установка DE/офиса падала бы всегда.
   rm -f "$TARGET/etc/resolv.conf"
+  # A-23: без resolv.conf в установленной системе нет DNS до первого
+  # запуска NetworkManager. Ставим symlink на его рабочий resolv.conf
+  # (создаётся при старте сервиса). ln -sf цель не проверяет —
+  # висячая ссылка до первого запуска NM допустима.
+  ln -sf /run/NetworkManager/resolv.conf "$TARGET/etc/resolv.conf" \
+    || say "ВНИМАНИЕ: не удалось создать symlink /etc/resolv.conf в установленной системе"
 
   echo "95"; echo "XXX"; echo "Финальная проверка..."; echo "XXX"
   # Жёсткая проверка: без ядра, grub.cfg и загрузочного кода система не
@@ -1087,13 +1934,35 @@ CHROOT_EOF
   if [[ -n "$DE_DM" && "$DE_OK" == "1" ]]; then
     # DE_OK=0 — оболочка не установилась, честно осталась KDE:
     # это не ошибка, а штатный fallback, DM не проверяем.
-    DM_LINK=$(readlink "$TARGET/etc/systemd/system/display-manager.service" 2>/dev/null || true)
-    case "$DM_LINK" in
-      *"$DE_DM"*) ;;
-      *) say "ОШИБКА: менеджер входа $DE_DM не включён (display-manager.service -> ${DM_LINK:-нет})"; exit 1 ;;
-    esac
+    # V-07: проверка по реальному состоянию цели, не по подстроке.
+    xros_verify_dm
+  fi
+  if [[ "$DE" == "none" ]]; then
+    # P4-AUD-04 FIX-B (V-09): независимая проверка default target.
+    xros_verify_default_target "multi-user.target"
   fi
   [[ -f "$TARGET/usr/share/xros/grub-theme/theme.txt" ]] || { say "ОШИБКА: тема GRUB не установлена"; exit 1; }
+  # Пункт 8 (1.1): перепроверка — приветствие не пережило установку.
+  # Удаление выполнено выше; здесь — backstop: если автостарт или
+  # бинарь всё же на месте (например, файл пересоздали), удаляем
+  # повторно и пишем предупреждение. Жёсткого стопа нет: это
+  # косметика, а не загрузка системы; но без бинаря никакой
+  # .desktop приветствие уже не запустит.
+  if [[ -e "$TARGET/etc/xdg/autostart/xros-welcome.desktop" || -e "$TARGET/usr/local/bin/xros-welcome-gui" ]]; then
+    rm -f "$TARGET/etc/xdg/autostart/xros-welcome.desktop" "$TARGET/usr/local/bin/xros-welcome-gui" "$TARGET/usr/share/applications/xros-welcome.desktop" 2>/dev/null || true
+    say "ВНИМАНИЕ: приветствие xros-welcome всё ещё было в установленной системе после удаления — удалено повторно"
+  fi
+  # Пункт 9 (1.1): перепроверка — живых маркеров не осталось.
+  # sudoers живой системы (NOPASSWD для удалённого пользователя xros)
+  # удалён выше (rm live-xros); issue переписан выше без «живая».
+  # Здесь — backstop с повторным удалением/предупреждением.
+  if [[ -e "$TARGET/etc/sudoers.d/live-xros" ]]; then
+    rm -f "$TARGET/etc/sudoers.d/live-xros" 2>/dev/null || true
+    say "ВНИМАНИЕ: live-маркер sudoers (live-xros) всё ещё был в установленной системе — удалён повторно"
+  fi
+  if grep -qi 'жив' "$TARGET/etc/issue" 2>/dev/null; then
+    say "ВНИМАНИЕ: /etc/issue установленной системы всё ещё содержит «живая» — проверьте запись issue"
+  fi
   if [[ $UEFI -eq 1 ]]; then
     [[ -f "$TARGET/boot/efi/EFI/XrOS/grubx64.efi" ]] || { say "ОШИБКА: EFI-загрузчик не установлен"; exit 1; }
   else
@@ -1151,4 +2020,3 @@ DE_RESULT=$(cat /tmp/xros-de-result 2>/dev/null || echo "$DE_NAME")
 dialog --colors --backtitle "$BACKTITLE" --title "$TITLE" --yes-label "Перезагрузить" --no-label "Остаться в живой системе" --yesno "\Zb\Z4Готово! XrOS установлена на $DISK.\Zn\n\nКомпьютер: $HOSTNAME\nПользователь: $USERNAME\nОболочка: $DE_RESULT\nЗагрузчик: GRUB с темой XrOS\n\nНе забудьте вынуть флешку/диск с ISO перед перезагрузкой." 15 65
 if [[ $? -eq 0 ]]; then reboot; fi
 exit 0
-

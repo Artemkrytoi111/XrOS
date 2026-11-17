@@ -2,18 +2,20 @@
 # XrOS — диагностика проекта (этап E, аудит 10.11.2026).
 # Запуск: ./scripts/xros-diagnose.sh
 # Проверяет только то, что можно проверить без сборки ISO и без QEMU.
-# Результат честный: PASS / FAIL / SKIP (не проверяется — так и пишется).
+# Результат честный: PASS / FAIL / SKIP (не проверяется — так и пишется)
+# / NOT CONFIGURED (компонент намеренно не настроен — не PASS, не FAIL).
 # При любом FAIL скрипт завершается с кодом 1.
 # Проверки, требующие chroot (cargo, makepkg, grub-script-check),
 # на хосте без этих инструментов дают SKIP; их результаты — в AUDIT-REPORT.md.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PASS=0; FAIL=0; SKIP=0
+PASS=0; FAIL=0; SKIP=0; NCFG=0
 FAILED=()
 
 ok()   { echo "PASS  $1"; PASS=$((PASS+1)); }
 bad()  { echo "FAIL  $1"; FAIL=$((FAIL+1)); FAILED+=("$1"); }
 skip() { echo "SKIP  $1 ($2)"; SKIP=$((SKIP+1)); }
+nc()   { echo "NOT CONFIGURED  $1"; NCFG=$((NCFG+1)); }
 
 cd "$ROOT"
 
@@ -392,10 +394,36 @@ fi
 # при открытии диалога фокус ставится на главную кнопку (request_focus),
 # иначе Tab циклит виджеты главного окна и до кнопок диалога не доходит
 # (INSTALLER-VALIDATION.md: подтверждение стирания — FAIL).
-if grep -q 'request_focus' src/xros-install-gui-rs/src/app.rs && [[ packages/xros-installer/xros-install-gui -nt src/xros-install-gui-rs/src/app.rs ]]; then
-  ok "xros-install-gui: фокус диалога (request_focus), бинарь свежее исходников"
+# R-09: две независимые проверки с отдельным статусом (раньше одна
+# проверка смешивала request_focus и свежесть бинаря).
+# 1) Наличие обязательных вызовов request_focus в исходниках.
+if grep -q 'request_focus' src/xros-install-gui-rs/src/app.rs; then
+  ok "xros-install-gui: фокус диалога (request_focus в app.rs)"
 else
-  bad "xros-install-gui: нет request_focus в app.rs или бинарь старше исходников"
+  bad "xros-install-gui: нет request_focus в app.rs"
+fi
+# 2) Свежесть и соответствие поставляемого бинаря исходникам:
+#    бинарь новее app.rs и system.rs И содержит маркер фильтрации
+#    RAID (linux_raid_member) — это доказывает, что в нём есть
+#    исправление A-38, а не только свежий mtime. При устаревшем
+#    бинаре — прямое указание на пересборку GUI.
+#    R-20 FINAL F2 (13.11.2026): полная строка 'linux_raid_member' в
+#    бинаре НЕ хранится — LLVM разрезает литералы; проверяется
+#    фрагмент 'linux_raid_membe', который присутствует в официальном
+#    бинаре 1.1 (cf3cdd2e…), плюс 14 RAID-фрагментов и 7/7 unit-тестов.
+if [[ packages/xros-installer/xros-install-gui -nt src/xros-install-gui-rs/src/app.rs ]] \
+   && [[ packages/xros-installer/xros-install-gui -nt src/xros-install-gui-rs/src/system.rs ]]; then
+  if command -v strings >/dev/null 2>&1; then
+    if strings packages/xros-installer/xros-install-gui | grep -q 'linux_raid_membe'; then
+      ok "xros-install-gui: бинарь свежее исходников и содержит фильтрацию RAID (A-38)"
+    else
+      bad "xros-install-gui: бинарь свежее исходников, но БЕЗ фильтрации RAID (A-38) — требуется пересборка GUI (cargo build --release)"
+    fi
+  else
+    ok "xros-install-gui: бинарь свежее исходников (проверка содержимого пропущена: нет strings)"
+  fi
+else
+  bad "xros-install-gui: бинарь старше исходников — требуется пересборка GUI (cargo build --release)"
 fi
 # fixed7 (11.11.2026): надёжное ожидание ActivityManager перед
 # запуском plasmashell — After= для Type=simple гарантирует только
@@ -506,7 +534,10 @@ if grep -q 'sudo --preserve-env=XROS_NONINTERACTIVE,XROS_INSTALL_CONF' src/xros-
 if grep -q 'umask 077' src/xros-install; then ok "xros-install: umask 077"; else bad "xros-install: нет umask 077"; fi
 if grep -q 'rm -f "$TARGET/etc/machine-id"' src/xros-install && grep -q 'systemd-machine-id-setup' src/xros-install; then ok "xros-install: machine-id удаляется + пересоздаётся"; else bad "xros-install: нет обработки machine-id"; fi
 if grep -q 'rm -f "$TARGET/etc/resolv.conf"' src/xros-install; then ok "xros-install: resolv.conf удаляется"; else bad "xros-install: нет удаления resolv.conf"; fi
-if grep -q 'systemctl disable sddm.service' src/xros-install && grep -q 'systemctl disable lightdm.service' src/xros-install && grep -q 'systemctl disable gdm.service' src/xros-install; then ok "xros-install: все DM отключаются перед включением выбранного"; else bad "xros-install: не все DM отключаются"; fi
+# P4-AUD-02 (R-20): DM отключаются через helper xros_disable_dm
+# (fail-closed), а не прямыми 'systemctl disable <dm>.service' —
+# проверка ищет цикл по всем трём DM + вызов helper.
+if grep -q 'for dm in sddm lightdm gdm' src/xros-install && grep -q 'xros_disable_dm "\$dm.service"' src/xros-install; then ok "xros-install: все DM отключаются перед включением выбранного"; else bad "xros-install: не все DM отключаются"; fi
 if grep -q 'autologin-user=' src/xros-install && grep -q 'AutomaticLoginEnable=True' src/xros-install; then ok "xros-install: автовход GDM/LightDM/SDDM по выбранному DE"; else bad "xros-install: нет автовхода GDM/LightDM"; fi
 if grep -q '\[\[ -s "$TARGET/etc/fstab" \]\]' src/xros-install && grep -q 'пользователь $USERNAME не создан' src/xros-install && grep -q 'hostname не записан' src/xros-install && grep -q 'display-manager.service' src/xros-install; then ok "xros-install: расширенная финальная проверка (fstab, пользователь, hostname, DM)"; else bad "xros-install: финальная проверка неполная"; fi
 if grep -q 'systemctl --global enable xros-welcome.service' profile/airootfs/root/customize_airootfs.sh; then
@@ -682,9 +713,11 @@ else
   bad "движок: DE=none — DE_PKGS/DE_DM не пустые"
 fi
 none_branch=$(sed -n '/elif \[\[ "\$DE" == "none" \]\]/,/^  else/p' src/xros-install)
-if echo "$none_branch" | grep -q 'systemctl disable sddm.service' \
-   && echo "$none_branch" | grep -q 'systemctl disable lightdm.service' \
-   && echo "$none_branch" | grep -q 'systemctl disable gdm.service' \
+# P4-AUD-02 (R-20): в ветке DE=none DM отключаются через helper
+# xros_disable_dm в цикле по всем трём DM (прямых 'systemctl disable
+# <dm>.service' больше нет); включений DM в ветке быть не должно.
+if echo "$none_branch" | grep -q 'for dm in sddm lightdm gdm' \
+   && echo "$none_branch" | grep -q 'xros_disable_dm "\$dm.service"' \
    && ! echo "$none_branch" | grep -q 'systemctl enable'; then
   ok "движок: DE=none отключает все DM и не включает ни один"
 else
@@ -841,6 +874,10 @@ fi
 
 # 20в. BIOS-GRUB: экспериментальный образ и логи QEMU на месте,
 # profiledef по-прежнему без bios.syslinux (вариант Б НЕ внедрён).
+# A-03: каталога experiments/ в рабочем клоне может не быть (артефакты
+# QEMU-тестов не входят в поставку) — тогда проверки артефактов SKIP,
+# а кодовые проверки (bootmodes) выполняются всегда.
+if [[ -d "experiments/bios-grub-test" ]]; then
 bios_iso="experiments/bios-grub-test/out/xros-bios-test.iso"
 if [[ -f "$bios_iso" ]]; then
   bios_sha=$(sha256sum "$bios_iso" | cut -d' ' -f1)
@@ -857,6 +894,9 @@ for f in bios-serial.log uefi-serial.log usb-serial.log bios-menu.png uefi-menu.
   [[ -f "experiments/bios-grub-test/logs/$f" ]] || { echo "  нет лога BIOS-теста: $f"; bios_logs_ok=0; }
 done
 if [[ $bios_logs_ok -eq 1 ]]; then ok "BIOS-GRUB: все 3 serial-лога и 3 скриншота меню на месте"; else bad "BIOS-GRUB: не хватает логов/скриншотов QEMU-тестов"; fi
+else
+  skip "BIOS-GRUB: тестовый ISO и логи QEMU" "нет каталога experiments/bios-grub-test (артефакты тестов не в поставке)"
+fi
 if grep -E "^bootmodes=" profile/profiledef.sh | grep -q 'bios.syslinux'; then
   bad "profiledef: bios.syslinux в bootmodes (вариант Б не должен внедряться без решения)"
 else
@@ -887,6 +927,9 @@ for cfg in profile/grub/grub.cfg profile/grub/loopback.cfg; do
 done
 uefi_after="experiments/uefi-test-module/logs/after/uefi-serial.log"
 uefi_before="experiments/uefi-test-module/logs/before/uefi-serial.log"
+# A-03: как в §20в — артефакты QEMU-тестов могут отсутствовать в клоне:
+# тогда SKIP, кодовые проверки grub.cfg выше выполняются всегда.
+if [[ -d "experiments/uefi-test-module" ]]; then
 if [[ -f "experiments/uefi-test-module/out/xros-uefi-test.iso" ]]; then
   ok "UEFI-тест: тестовый ISO на месте"
 else
@@ -910,6 +953,11 @@ if [[ -f "$uefi_after" ]]; then
   fi
 else
   bad "UEFI-тест: нет after-лога experiments/uefi-test-module/logs/after/uefi-serial.log"
+fi
+else
+  skip "UEFI-тест: тестовый ISO" "нет каталога experiments/uefi-test-module (артефакты тестов не в поставке)"
+  skip "UEFI-тест: доказательство дефекта (before-лог)" "нет каталога experiments/uefi-test-module"
+  skip "UEFI-тест: after-логи" "нет каталога experiments/uefi-test-module"
 fi
 
 # 20д. Процессы установщика / отмена: тесты ЗАПУСКАЮТСЯ, их итог —
@@ -988,14 +1036,18 @@ else
   bad "тест test-de-none.sh отсутствует или не исполняемый"
 fi
 
-# 20и. Пакетные списки: 49 пакетов живой системы (было 48; +1 — memtest86+:
-# меню в стиле EndeavourOS, 11.11.2026; до этого 47 + which, fixed10, D9;
-# qt6-declarative добавлен для Diamond, 11.11.2026; qt6-quickcontrols2 в Arch не
-# существует — QtQuick.Controls 2 входит в qt6-declarative); все 16
-# графических пакетов из XROS_GRAPHICS_PKGS входят в packages.x86_64.
+# 20и. Пакетные списки: 69 пакетов живой системы (было 57; +12 — 1.1,
+# 14.11.2026: приложения (firefox, libreoffice-fresh, kate, okular,
+# gwenview, haruna, elisa, ktorrent, kmail, ark, spectacle) и wine;
+# до этого 57: 55 + 2 — R-06, 12.11.2026: gnupg и archlinux-keyring
+# явно для production GPG-пути A-40; до этого 55: 49 + 6 — A-15,
+# plasma-workspace, kwin, breeze, breeze-cursors, mesa, qt6-wayland —
+# ядро Plasma явно, а не транзитивно; до этого 49: 48 + memtest86+,
+# см. ниже); все 16 графических пакетов из XROS_GRAPHICS_PKGS
+# входят в packages.x86_64.
 pkgs_now=$(grep -v '^\s*#' profile/packages.x86_64 | grep -v '^\s*$' || true)
 pkg_n=$(echo "$pkgs_now" | wc -l)
-if [[ "$pkg_n" -eq 49 ]]; then ok "packages.x86_64: 49 пакетов"; else bad "packages.x86_64: пакетов $pkg_n, ожидалось 49"; fi
+if [[ "$pkg_n" -eq 69 ]]; then ok "packages.x86_64: 69 пакетов"; else bad "packages.x86_64: пакетов $pkg_n, ожидалось 69"; fi
 gfx_missing=""
 for p in $gfx_list; do
   echo "$pkgs_now" | grep -qx "$p" || gfx_missing="$gfx_missing $p"
@@ -1048,16 +1100,84 @@ gui_sha=$(sha256sum packages/xros-installer/xros-install-gui 2>/dev/null | cut -
 # с f81a1b18… (fixed4) на e7350755…
 # fixed7 (11.11.2026): бинарь пересобран (фокус диалога, request_focus) —
 # sha256 обновлён с e7350755… (fixed5) на b533b9ff…
-if [[ "$gui_sha" == "b533b9ffa2179e955f6dfcd398715c734b15949cf616e6a88794777ca394f18a" ]]; then
-  ok "xros-install-gui (пакет): sha256 b533b9ff… (fixed7, 11.11.2026)"
+# R-08 (13.11.2026): бинарь заменён на собранный из текущих исходников —
+# sha256 обновлён с b533b9ff… (fixed7) на 6321b5a2… (официальный R-08,
+# проверен в R-20 FINAL и R-10B: cmp идентичен, .symtab на месте).
+# 1.1 (14.11.2026): бинарь пересобран из исходников с изменениями 1.1
+# (короткий пароль, vsync, убрана боковая панель) — sha256 обновлён
+# с 6321b5a2… (R-08) на cf3cdd2e… (официальный 1.1: cargo check/test/
+# clippy чисты, .symtab на месте, не stripped, RAID-фрагмент на месте).
+if [[ "$gui_sha" == "cf3cdd2e729580b318b6e0a6511f5eb700e76395dcf7aa073315de140545cb8c" ]]; then
+  ok "xros-install-gui (пакет): sha256 cf3cdd2e… (1.1, 14.11.2026)"
 else
-  bad "xros-install-gui (пакет): sha256 не совпадает с зафиксированным e7350755…"
+  bad "xros-install-gui (пакет): sha256 не совпадает с зафиксированным cf3cdd2e… (1.1)"
 fi
 cli_sha=$(sha256sum packages/xros-cli/xros 2>/dev/null | cut -d' ' -f1)
 if [[ "$cli_sha" == "9c67cfdcc1b50998e05be1d0c9efd6d1325473731b8b7de6971ebe049954e1aa" ]]; then
   ok "xros (CLI, пакет): sha256 9c67cfdc… (зафиксирован 10.11.2026)"
 else
   bad "xros (CLI, пакет): sha256 не совпадает с зафиксированным 9c67cfdc…"
+fi
+
+# ---------------------------------------------------------------- 20м. Сверка staged-бинарей с содержимым пакетов (A-05)
+# Пакеты в git лежат с sha256sums=('SKIP') — их содержимое нельзя
+# проверить по PKGBUILD. Честная замена: staged-бинарь в packages/
+# обязан совпадать с бинарём ВНУТРИ собранного .pkg.tar.zst, а копия
+# в profile/airootfs — со staged-бинарём. Расхождение = FAIL: в ISO
+# попадёт не то, что в репозитории. Распаковка — через bsdtar
+# (libarchive); без bsdtar на хосте проверка SKIP (на Arch-хосте
+# и в build-env rootfs bsdtar есть).
+if command -v bsdtar >/dev/null 2>&1; then
+  for spec in "xros-cli xros usr/local/bin/xros" "xros-installer xros-install-gui usr/local/bin/xros-install-gui"; do
+    read -r _pkg _bin _path <<< "$spec"
+    _pkgfile="$(ls -t "packages/$_pkg"/"$_pkg"-*.pkg.tar.zst 2>/dev/null | head -1)"
+    if [[ -z "$_pkgfile" ]]; then
+      bad "A-05: нет пакета $_pkg для сверки"
+      continue
+    fi
+    _in_pkg="$(bsdtar -xOf "$_pkgfile" "$_path" 2>/dev/null | sha256sum | cut -d' ' -f1)"
+    if [[ -z "$_in_pkg" ]]; then
+      bad "A-05: в пакете $_pkg нет $_path"
+      continue
+    fi
+    _staged="$(sha256sum "packages/$_pkg/$_bin" 2>/dev/null | cut -d' ' -f1)"
+    _live="$(sha256sum "profile/airootfs/usr/local/bin/$_bin" 2>/dev/null | cut -d' ' -f1)"
+    if [[ "$_staged" == "$_in_pkg" && "$_live" == "$_in_pkg" ]]; then
+      ok "A-05: $_bin: staged = пакет = airootfs (${_in_pkg:0:8}…)"
+    elif [[ "$_staged" != "$_in_pkg" ]]; then
+      bad "A-05: $_bin: staged packages/$_pkg/$_bin не совпадает с содержимым пакета $_pkg"
+    else
+      bad "A-05: $_bin: profile/airootfs/usr/local/bin/$_bin не совпадает с пакетом $_pkg"
+    fi
+  done
+else
+  skip "A-05: сверка staged-бинарей с пакетами" "нет bsdtar на хосте (нужен libarchive)"
+fi
+
+# ---------------------------------------------------------------- 20н. SDDM включён жёстко (A-10)
+# customize_airootfs.sh обязан включать sddm БЕЗ '|| true': молчаливое
+# проглатывание ошибки включения — это чёрный экран без лога. Статическая
+# проверка (без chroot): жёсткий enable в customize + пакеты-источники
+# юнита и сессии в списке: sddm даёт /usr/lib/systemd/system/sddm.service,
+# plasma-workspace — /usr/share/wayland-sessions/plasma.desktop.
+if grep -q 'systemctl enable sddm.service' profile/airootfs/root/customize_airootfs.sh; then
+  if grep 'systemctl enable sddm.service' profile/airootfs/root/customize_airootfs.sh | grep -q '|| true'; then
+    bad "A-10: customize: 'systemctl enable sddm.service' с '|| true' — ошибка включения проглатывается"
+  else
+    ok "A-10: customize: 'systemctl enable sddm.service' без '|| true' (жёстко)"
+  fi
+else
+  bad "A-10: customize: нет 'systemctl enable sddm.service'"
+fi
+if grep -qx 'sddm' profile/packages.x86_64; then
+  ok "A-10: sddm в profile/packages.x86_64 (юнит sddm.service будет в системе)"
+else
+  bad "A-10: sddm НЕТ в profile/packages.x86_64 — юниту sddm.service неоткуда взяться"
+fi
+if grep -qx 'plasma-workspace' profile/packages.x86_64; then
+  ok "A-10: plasma-workspace в profile/packages.x86_64 (/usr/share/wayland-sessions/plasma.desktop будет в системе)"
+else
+  bad "A-10: plasma-workspace НЕТ в profile/packages.x86_64 — сессии plasma.desktop неоткуда взяться"
 fi
 
 # ---------------------------------------------------------------- 21. Права профиля (дефект 10.11.2026, чёрный экран)
@@ -1181,8 +1301,324 @@ else
   ok "skel: kscreenlockerrc не в skel (только живой пользователь)"
 fi
 
+# ---------------------------------------------------------------- 23. RAID: согласованность блоклистов (A-24, A-38)
+# Все три компонента обязаны блокировать одни и те же ФС/типы:
+# linux_raid_member, LVM2_member, crypto_LUKS; TYPE — по префиксу raid*.
+for _f in src/xros-install src/xros-installer-diamond/bridge.py src/xros-install-gui-rs/src/system.rs; do
+  if grep -q "linux_raid_member" "$_f"; then
+    ok "A-24: linux_raid_member в блоклисте ${_f#src/}"
+  else
+    bad "A-24: нет linux_raid_member в блоклисте $_f"
+  fi
+done
+if grep -qE "grep -qE '\^\(lvm\|crypt\|raid\)'" src/xros-install; then
+  ok "A-24: Bash: TYPE по префиксу raid* (regex ^(lvm|crypt|raid))"
+else
+  bad "A-24: Bash: нет проверки TYPE по префиксу raid*"
+fi
+if grep -q 'startswith("raid")' src/xros-installer-diamond/bridge.py; then
+  ok "A-24: Diamond: TYPE по префиксу raid* (startswith)"
+else
+  bad "A-24: Diamond: нет проверки TYPE по префиксу raid*"
+fi
+if grep -q 'starts_with("raid")' src/xros-install-gui-rs/src/system.rs; then
+  ok "A-24: Rust: TYPE по префиксу raid* (starts_with)"
+else
+  bad "A-24: Rust: нет проверки TYPE по префиксу raid*"
+fi
+if grep -q 'kind == "raid"' src/xros-install-gui-rs/src/system.rs; then
+  bad "A-24: Rust: точное kind == \"raid\" осталось (не ловит raid1/raid5)"
+else
+  ok "A-24: Rust: точного kind == \"raid\" нет"
+fi
+if grep -q "def _device_blocked" src/xros-installer-diamond/bridge.py \
+   && grep -q "if _device_blocked(ch)" src/xros-installer-diamond/bridge.py; then
+  ok "A-24: Diamond: рекурсивный обход children (_device_blocked)"
+else
+  bad "A-24: Diamond: нет рекурсивного обхода children"
+fi
+if grep -q 'is_blocked_fstype(&fstype) || is_blocked_kind(kind)' src/xros-install-gui-rs/src/system.rs; then
+  ok "A-24: Rust: list_partitions проверяет и FSTYPE, и TYPE"
+else
+  bad "A-24: Rust: list_partitions проверяет только FSTYPE"
+fi
+
+# ---------------------------------------------------------------- 24. RAID: защита перед форматированием (A-38)
+# mkfs_root вызывает проверку блокировки (R-04: обёртка
+# xros_require_disk_free) ДО первого mkfs.
+if awk '/^mkfs_root\(\) \{/{f=1} f && /xros_require_disk_free/{found=1; exit 0} f && /mkfs\./{exit 1} END{if (!found) exit 1}' src/xros-install; then
+  ok "A-38: mkfs_root проверяет блокировку до mkfs"
+else
+  bad "A-38: mkfs_root проверяет блокировку до mkfs"
+fi
+# Повторная проверка диска — непосредственно перед wipefs (обёртка R-04).
+_recheck="$(grep -n 'if ! xros_require_disk_free "$DISK"; then exit 1; fi' src/xros-install | tail -1 | cut -d: -f1)"
+_wipefs="$(grep -n 'wipefs -a "$DISK"' src/xros-install | head -1 | cut -d: -f1)"
+if [[ -n "$_recheck" && -n "$_wipefs" && "$_recheck" -lt "$_wipefs" ]]; then
+  ok "A-38: повторная проверка диска перед wipefs"
+else
+  bad "A-38: повторная проверка диска перед wipefs"
+fi
+# R-04: прямых вызовов `if xros_disk_blocked` не осталось — все
+# вызывающие места обязаны идти через обёртку (иначе код 2 ошибки
+# трактовался бы как «свободен»).
+if [[ "$(grep -c 'if xros_disk_blocked "\$' src/xros-install)" -eq 0 ]]; then
+  ok "A-38: нет прямых if xros_disk_blocked (только обёртка R-04)"
+else
+  bad "A-38: остались прямые if xros_disk_blocked (нужна обёртка R-04)"
+fi
+# R-02: все типы fakeraid из libblkid — в блоклисте движка.
+_fakeraid_ok=1
+for _ft in isw_raid_member ddf_raid_member promise_fasttrack_raid_member adaptec_raid_member hpt37x_raid_member hpt45x_raid_member jmicron_raid_member lsi_mega_raid_member nvidia_raid_member silicon_medley_raid_member via_raid_member LVM1_member; do
+  grep -q "$_ft" src/xros-install || _fakeraid_ok=0
+done
+if [[ "$_fakeraid_ok" -eq 1 ]]; then
+  ok "A-38: все типы fakeraid+LVM1 в блоклисте движка"
+else
+  bad "A-38: не все типы fakeraid+LVM1 в блоклисте движка"
+fi
+# Тест test-raid-block.sh запускается и проходит.
+if [[ -x scripts/tests/test-raid-block.sh ]]; then
+  if tout=$(./scripts/tests/test-raid-block.sh 2>&1); then
+    tsum=$(echo "$tout" | grep -oE 'PASS=[0-9]+ FAIL=0' | head -1)
+    ok "A-38: тест test-raid-block.sh пройден ($tsum)"
+  else
+    echo "$tout" | tail -5; bad "A-38: тест test-raid-block.sh НЕ пройден"
+  fi
+else
+  bad "A-38: нет исполняемого scripts/tests/test-raid-block.sh"
+fi
+
+# ---------------------------------------------------------------- 25. SHA-256: строгая проверка целостности ISO (A-39)
+# Отсутствие проверки — никогда не PASS. Правила: совпадение — PASS;
+# несовпадение/невалидный хеш/дубли/повреждение — FAIL; отсутствие
+# файла/записи — SKIP в необязательном режиме, FAIL в обязательном.
+if grep -q -- '--require-sha256' scripts/check-iso.sh; then
+  ok "A-39: check-iso.sh знает --require-sha256"
+else
+  bad "A-39: check-iso.sh не знает --require-sha256"
+fi
+if grep -q 'сверка невозможна' scripts/check-iso.sh; then
+  bad "A-39: в check-iso.sh остался ложный PASS «сверка невозможна»"
+else
+  ok "A-39: в check-iso.sh нет ложного PASS «сверка невозможна»"
+fi
+if grep -q 'skip "iso-sha256"' scripts/check-iso.sh; then
+  ok "A-39: отсутствие файла/записи — SKIP в необязательном режиме"
+else
+  bad "A-39: отсутствие файла/записи — SKIP в необязательном режиме"
+fi
+if grep -q 'обязательный режим сборки' scripts/check-iso.sh; then
+  ok "A-39: отсутствие файла/записи — FAIL в обязательном режиме"
+else
+  bad "A-39: отсутствие файла/записи — FAIL в обязательном режиме"
+fi
+if grep -q 'дубли' scripts/check-iso.sh; then
+  ok "A-39: дубли записи — FAIL"
+else
+  bad "A-39: дубли записи — FAIL"
+fi
+if grep -q 'повреждён' scripts/check-iso.sh; then
+  ok "A-39: повреждённый SHA256SUMS — FAIL"
+else
+  bad "A-39: повреждённый SHA256SUMS — FAIL"
+fi
+if grep -q '\^(\[0-9a-f\]{64})' scripts/check-iso.sh || grep -q 'BASH_REMATCH' scripts/check-iso.sh; then
+  ok "A-39: формат хеша валидируется (64 hex, строгий разбор)"
+else
+  bad "A-39: формат хеша валидируется (64 hex, строгий разбор)"
+fi
+if grep -qF '"$CHECK_ISO" --archiso --require-sha256' scripts/build.sh; then
+  ok "A-39: build.sh вызывает check-iso с --require-sha256"
+else
+  bad "A-39: build.sh вызывает check-iso с --require-sha256"
+fi
+_sums_line="$(grep -n 'sha256sum.*> SHA256SUMS' scripts/build.sh | head -1 | cut -d: -f1)"
+_check_line="$(grep -nF '"$CHECK_ISO" --archiso --require-sha256' scripts/build.sh | head -1 | cut -d: -f1)"
+if [[ -n "$_sums_line" && -n "$_check_line" && "$_sums_line" -lt "$_check_line" ]]; then
+  ok "A-39: build.sh создаёт SHA256SUMS ДО проверки"
+else
+  bad "A-39: build.sh создаёт SHA256SUMS ДО проверки"
+fi
+_rm_line="$(grep -nF 'rm -rf "$WORK"' scripts/build.sh | head -1 | cut -d: -f1)"
+if [[ -n "$_rm_line" ]] && sed -n "${_rm_line}p" scripts/build.sh | grep -q 'SHA256SUMS'; then
+  ok "A-39: build.sh удаляет устаревший SHA256SUMS на шаге 10"
+else
+  bad "A-39: build.sh удаляет устаревший SHA256SUMS на шаге 10"
+fi
+# Тест test-check-iso-sha256.sh запускается и проходит.
+if [[ -x scripts/tests/test-check-iso-sha256.sh ]]; then
+  if tout=$(./scripts/tests/test-check-iso-sha256.sh 2>&1); then
+    tsum=$(echo "$tout" | grep -oE 'PASS=[0-9]+ FAIL=0' | head -1)
+    ok "A-39: тест test-check-iso-sha256.sh пройден ($tsum)"
+  else
+    echo "$tout" | tail -5; bad "A-39: тест test-check-iso-sha256.sh НЕ пройден"
+  fi
+else
+  bad "A-39: нет исполняемого scripts/tests/test-check-iso-sha256.sh"
+fi
+
+# ---------------------------------------------------------------- 26. GPG: безопасная обработка ключей (A-40)
+# Отсутствие production-ключа — NOT CONFIGURED, а не PASS и не FAIL:
+# GPG пока не настроен, и это честно отражено в отчёте, а не спрятано.
+# Ошибки pacman-key не должны проглатываться (|| true), отпечаток
+# проверяется и в Live, и в установленной системе, релизная сборка
+# блокируется гейтом до подписания пакетов и БД.
+GPG_CONF="profile/airootfs/usr/share/xros/xros-gpg.conf"
+if [[ -f "$GPG_CONF" ]]; then
+  ok "A-40: конфиг $GPG_CONF на месте"
+  _gpg_fpr="$(sed -n 's/^XROS_GPG_PROD_FPR="\(.*\)"$/\1/p' "$GPG_CONF" | head -1)"
+  if [[ -z "$_gpg_fpr" ]]; then
+    nc "A-40: production GPG не настроен (XROS_GPG_PROD_FPR пуст)"
+  elif [[ "$_gpg_fpr" =~ ^[0-9A-Fa-f]{40}$ ]]; then
+    ok "A-40: production fingerprint задан (40 hex)"
+  else
+    bad "A-40: production fingerprint в конфиге — неверный формат"
+  fi
+else
+  bad "A-40: нет конфига $GPG_CONF"
+fi
+if [[ -x profile/airootfs/usr/local/bin/xros-gpg-check ]]; then
+  ok "A-40: helper xros-gpg-check исполняемый"
+else
+  bad "A-40: нет исполняемого profile/airootfs/usr/local/bin/xros-gpg-check"
+fi
+if grep -q '"/usr/local/bin/xros-gpg-check"\]="0:0:755"' profile/profiledef.sh; then
+  ok "A-40: xros-gpg-check есть в file_permissions profiledef.sh"
+else
+  bad "A-40: xros-gpg-check нет в file_permissions profiledef.sh"
+fi
+if grep 'pacman-key' profile/airootfs/root/customize_airootfs.sh | grep -q '|| true'; then
+  bad "A-40: customize_airootfs.sh проглатывает ошибки pacman-key (|| true)"
+else
+  ok "A-40: customize_airootfs.sh не проглатывает ошибки pacman-key"
+fi
+if grep 'pacman-key' src/xros-install | grep -q '|| true'; then
+  bad "A-40: движок проглатывает ошибки pacman-key (|| true)"
+else
+  ok "A-40: движок не проглатывает ошибки pacman-key"
+fi
+if grep -q 'pacman-key --finger' profile/airootfs/root/customize_airootfs.sh \
+   && grep -q 'pacman-key --finger' src/xros-install; then
+  ok "A-40: отпечаток проверяется и в customize, и в движке"
+else
+  bad "A-40: отпечаток проверяется и в customize, и в движке"
+fi
+if grep -q 'xros_import_xros_key' src/xros-install; then
+  ok "A-40: движок импортирует ключ XrOS в установленную систему"
+else
+  bad "A-40: движок импортирует ключ XrOS в установленную систему"
+fi
+if grep -q 'xros-gpg-check' scripts/build.sh; then
+  ok "A-40: build.sh проверяет публичный ключ до копирования в профиль"
+else
+  bad "A-40: build.sh проверяет публичный ключ до копирования в профиль"
+fi
+if grep -q 'release_gate' scripts/build.sh && grep -q -- '--release' scripts/build.sh; then
+  ok "A-40: release gate в build.sh (--release + проверка подписей)"
+else
+  bad "A-40: release gate в build.sh (--release + проверка подписей)"
+fi
+if [[ -x scripts/verify-repo-signatures.sh ]]; then
+  ok "A-40: scripts/verify-repo-signatures.sh исполняемый"
+else
+  bad "A-40: нет исполняемого scripts/verify-repo-signatures.sh"
+fi
+if [[ -x scripts/sign-repo-offline.sh ]]; then
+  ok "A-40: scripts/sign-repo-offline.sh исполняемый"
+else
+  bad "A-40: нет исполняемого scripts/sign-repo-offline.sh"
+fi
+if grep -q 'xros-gpg-test/xros-public.key' scripts/build.sh \
+   || grep -q 'XROS_GPG_PROD_FPR="0EC935D2' "$GPG_CONF" 2>/dev/null; then
+  bad "A-40: тестовый ключ используется как production"
+else
+  ok "A-40: тестовый ключ не используется как production"
+fi
+# R-01: release gate проверяет SigLevel отдельным helper'ом
+# (старый awk находил Required в комментарии).
+if grep -q 'check-siglevel-required.sh' scripts/build.sh && [[ -x scripts/check-siglevel-required.sh ]]; then
+  ok "A-40: build.sh проверяет SigLevel через check-siglevel-required.sh (R-01)"
+else
+  bad "A-40: build.sh не использует check-siglevel-required.sh (R-01)"
+fi
+if [[ -x scripts/tests/test-release-gate-siglevel.sh ]]; then
+  if tout=$(./scripts/tests/test-release-gate-siglevel.sh 2>&1); then
+    tsum=$(echo "$tout" | grep -oE 'PASS=[0-9]+ FAIL=0' | head -1)
+    ok "A-40: тест test-release-gate-siglevel.sh пройден ($tsum)"
+  else
+    echo "$tout" | tail -5; bad "A-40: тест test-release-gate-siglevel.sh НЕ пройден"
+  fi
+else
+  bad "A-40: нет исполняемого scripts/tests/test-release-gate-siglevel.sh"
+fi
+# R-06: gnupg и archlinux-keyring — явно в живой системе (нужны для
+# xros-gpg-check, pacman-key --init/--populate и проверки подписей).
+if grep -qx 'gnupg' profile/packages.x86_64; then
+  ok "A-40: gnupg в profile/packages.x86_64 (R-06)"
+else
+  bad "A-40: gnupg отсутствует в profile/packages.x86_64 (R-06)"
+fi
+if grep -qx 'archlinux-keyring' profile/packages.x86_64; then
+  ok "A-40: archlinux-keyring в profile/packages.x86_64 (R-06)"
+else
+  bad "A-40: archlinux-keyring отсутствует в profile/packages.x86_64 (R-06)"
+fi
+# R-07: неудача --init/--populate — фатальная ошибка, а не предупреждение.
+if grep -q 'pacman-key --init не удался в установленной системе.*установка прервана (R-07)' src/xros-install; then
+  ok "A-40: pacman-key --init — фатальная ошибка (R-07)"
+else
+  bad "A-40: pacman-key --init — не фатальная ошибка (R-07)"
+fi
+if grep -q 'pacman-key --populate archlinux не удался в установленной системе.*установка прервана (R-07)' src/xros-install; then
+  ok "A-40: pacman-key --populate — фатальная ошибка (R-07)"
+else
+  bad "A-40: pacman-key --populate — не фатальная ошибка (R-07)"
+fi
+if [[ -x scripts/tests/test-keyring-handling.sh ]]; then
+  if tout=$(./scripts/tests/test-keyring-handling.sh 2>&1); then
+    tsum=$(echo "$tout" | grep -oE 'PASS=[0-9]+ FAIL=0' | head -1)
+    ok "A-40: тест test-keyring-handling.sh пройден ($tsum)"
+  else
+    echo "$tout" | tail -5; bad "A-40: тест test-keyring-handling.sh НЕ пройден"
+  fi
+else
+  bad "A-40: нет исполняемого scripts/tests/test-keyring-handling.sh"
+fi
+# Согласованность: SigLevel Optional допустим ТОЛЬКО пока FPR пуст
+# (dev-режим); Required — только при заданном FPR и подписях.
+_xros_siglevel() {
+  awk '/^\[xros\]/{s=1; next} /^\[/{s=0} s && /^SigLevel = /{print $3; exit}' "$1"
+}
+_sig1="$(_xros_siglevel profile/pacman.conf)"
+_sig2="$(_xros_siglevel profile/airootfs/etc/pacman.conf)"
+if [[ "$_sig1" == "$_sig2" ]]; then
+  if [[ -z "${_gpg_fpr:-}" && "$_sig1" == "Optional" ]]; then
+    ok "A-40: SigLevel = Optional в обоих pacman.conf согласован с пустым FPR (dev-режим)"
+  elif [[ -n "${_gpg_fpr:-}" && "$_sig1" == "Required" ]]; then
+    ok "A-40: SigLevel = Required в обоих pacman.conf согласован с заданным FPR"
+  elif [[ -z "${_gpg_fpr:-}" && "$_sig1" == "Required" ]]; then
+    bad "A-40: SigLevel = Required при пустом FPR — подписи ещё нет"
+  else
+    bad "A-40: SigLevel = Optional при заданном FPR — небезопасно для релиза"
+  fi
+else
+  bad "A-40: SigLevel [xros] различается в двух pacman.conf ($_sig1 vs $_sig2)"
+fi
+# Тест test-gpg-handling.sh запускается и проходит.
+if [[ -x scripts/tests/test-gpg-handling.sh ]]; then
+  if tout=$(./scripts/tests/test-gpg-handling.sh 2>&1); then
+    tsum=$(echo "$tout" | grep -oE 'PASS=[0-9]+ FAIL=0' | head -1)
+    ok "A-40: тест test-gpg-handling.sh пройден ($tsum)"
+  else
+    echo "$tout" | tail -5; bad "A-40: тест test-gpg-handling.sh НЕ пройден"
+  fi
+else
+  bad "A-40: нет исполняемого scripts/tests/test-gpg-handling.sh"
+fi
+
 echo
-echo "Итого: PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
+echo "Итого: PASS=$PASS FAIL=$FAIL SKIP=$SKIP NOT CONFIGURED=$NCFG"
 if [[ $FAIL -gt 0 ]]; then
   echo "Не пройдено:"
   printf '  - %s\n' "${FAILED[@]}"

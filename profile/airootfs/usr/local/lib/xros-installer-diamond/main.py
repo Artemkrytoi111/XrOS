@@ -9,7 +9,18 @@
 import os
 import sys
 
-from PyQt6.QtCore import QUrl
+# Самоповышение прав (найдено в Live UEFI build3, 11.11.2026): окно
+# приветствия запускает установщик БЕЗ sudo (Popen([INSTALLER])), а мост
+# вызывает движок напрямую, без sudo. Без этого блока Diamond работал бы
+# от пользователя xros, и движок падал бы на разметке/монтировании.
+# Паттерн — как в старом Rust GUI (main.rs): если не root, перевыполняем
+# себя через sudo (у живого пользователя xros sudo без пароля).
+# Wayland-переменные (WAYLAND_DISPLAY, XDG_RUNTIME_DIR) sudo сохраняет,
+# поэтому окно открывается в той же сессии.
+if os.geteuid() != 0:
+    os.execvp("sudo", ["sudo", sys.executable, os.path.abspath(__file__), *sys.argv[1:]])
+
+from PyQt6.QtCore import QUrl, QTimer
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtQml import QQmlApplicationEngine
 
@@ -33,6 +44,18 @@ def main() -> int:
     if not engine.rootObjects():
         print("ОШИБКА: не удалось загрузить QML", file=sys.stderr)
         return 1
+
+    # D14 (12.11.2026): принудительная активация окна и захват фокуса.
+    # В UEFI Live клавиатура не доходила до QML (печать/Tab/Enter игнорировались).
+    # После загрузки просим активацию корневого окна.
+    def activate_window():
+        roots = engine.rootObjects()
+        if roots:
+            win = roots[0]
+            win.requestActivate()
+            win.raise_()
+    QTimer.singleShot(300, activate_window)
+
     return app.exec()
 
 

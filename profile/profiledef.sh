@@ -36,10 +36,6 @@ kernel_params_aarch64="clk_ignore_unused pd_ignore_unused arm64.nopauth"
 file_permissions=(
   ["/etc/shadow"]="0:0:400"
   ["/root"]="0:0:750"
-  ["/root/.automated_script.sh"]="0:0:755"
-  ["/root/.gnupg"]="0:0:700"
-  ["/usr/local/bin/choose-mirror"]="0:0:755"
-  ["/usr/local/bin/Installation_guide"]="0:0:755"
   ["/usr/local/bin/xros-install"]="0:0:755"
   ["/usr/local/bin/xros-install-gui"]="0:0:755"
   ["/usr/local/bin/xros-installer-diamond"]="0:0:755"
@@ -48,5 +44,11 @@ file_permissions=(
   ["/usr/local/bin/xros-welcome-gui"]="0:0:755"
   ["/usr/local/bin/xros-set-wallpaper"]="0:0:755"
   ["/usr/local/bin/xros-wait-kactivitymanagerd"]="0:0:755"
-  ["/usr/local/bin/livecd-sound"]="0:0:755"
+  ["/usr/local/bin/xros-gpg-check"]="0:0:755"
+  ["/usr/local/bin/xros-auto-update"]="0:0:755"
 )
+# A-35 (12.11.2026): удалены мёртвые записи для файлов, которых нет
+# в профиле (проверено: отсутствуют в profile/airootfs):
+# /root/.automated_script.sh, /root/.gnupg,
+# /usr/local/bin/{choose-mirror,Installation_guide,livecd-sound}.
+# /etc/shadow оставлен: его создаёт pacstrap, запись живая.

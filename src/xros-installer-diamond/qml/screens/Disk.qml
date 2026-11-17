@@ -16,14 +16,45 @@ Item {
     property var disks: []
     property var selectedDisk: null
     property string selectedPart: ""
+    property string selectedEfi: ""
     property string partMode: "erase"
     property string fs: "ext4"
     property bool confirmed: false
 
     function validate() {
-        if (!selectedDisk || selectedDisk.isIsoDisk) return false
-        if (partMode === "manual" && selectedPart === "") return false
+        if (!selectedDisk || selectedDisk.isIsoDisk || selectedDisk.blocked) return false
+        if (partMode === "manual") {
+            if (selectedPart === "") return false
+            if (bridge.isUefi() && selectedEfi === "") return false
+        }
         return confirmed
+    }
+
+    // Ручной режим: разделы-кандидаты (без LVM/LUKS/RAID, A-24).
+    // EFI — только FAT (vfat): движок в ручном режиме EFI не
+    // форматирует, а только монтирует, поэтому он обязан быть FAT.
+    function manualParts() {
+        if (!selectedDisk) return []
+        return selectedDisk.partitions.filter(function(p) { return !p.blocked })
+    }
+    function efiParts() {
+        return manualParts().filter(function(p) { return p.fs === "vfat" })
+    }
+    function indexOfPart(parts, path) {
+        for (var i = 0; i < parts.length; i++)
+            if (parts[i].path === path) return i
+        return -1
+    }
+    // Модели ComboBox — императивно (A-30): привязка модели сбрасывала
+    // бы currentIndex в 0 (раздел по умолчанию), а нам нужен -1,
+    // пока пользователь сам не выберет раздел.
+    function refreshPartBoxes() {
+        var mp = manualParts()
+        rootPartBox.model = mp.map(function(p) { return p.path + "  " + (p.fs || "") + "  " + p.sizeHuman })
+        rootPartBox.currentIndex = indexOfPart(mp, selectedPart)
+        var ep = efiParts()
+        efiPartBox.model = ep.map(function(p) { return p.path + "  " + (p.fs || "") + "  " + p.sizeHuman })
+        efiPartBox.currentIndex = indexOfPart(ep, selectedEfi)
     }
 
     Component.onCompleted: {
@@ -39,6 +70,8 @@ Item {
         partMode = installer.settings["PARTMODE"] || "erase"
         fs = installer.settings["FS"] || "ext4"
         selectedPart = installer.settings["ROOT_PART"] || ""
+        selectedEfi = installer.settings["EFI_PART"] || ""
+        refreshPartBoxes()
     }
 
     function applyChoice() {
@@ -46,11 +79,19 @@ Item {
         installer.settings["FS"] = fs
         installer.settings["DISK"] = selectedDisk ? selectedDisk.path : ""
         installer.settings["ROOT_PART"] = partMode === "manual" ? selectedPart : ""
+        installer.settings["EFI_PART"] = partMode === "manual" ? selectedEfi : ""
     }
 
     function openConfirm() {
         confirmDialog.diskName = selectedDisk ? selectedDisk.path + " (" + selectedDisk.model + ", " + selectedDisk.sizeHuman + ")" : ""
-        confirmDialog.partList = selectedDisk ? selectedDisk.partitions : []
+        // A-30: в ручном режиме показываем ТОЛЬКО выбранный корневой
+        // раздел (форматируется только он; EFI лишь монтируется).
+        // В режиме erase — все разделы диска (будут стёрты).
+        if (partMode === "manual") {
+            confirmDialog.partList = manualParts().filter(function(p) { return p.path === selectedPart })
+        } else {
+            confirmDialog.partList = selectedDisk ? selectedDisk.partitions : []
+        }
         confirmDialog.open()
     }
 
@@ -81,7 +122,8 @@ Item {
                 delegate: Button {
                     text: modelData.name
                     Layout.preferredHeight: 44
-                    onClicked: { partMode = modelData.code; applyChoice() }
+                    // A-30: смена режима сбрасывает подтверждение.
+                    onClicked: { partMode = modelData.code; confirmed = false; applyChoice(); refreshPartBoxes() }
                     background: Rectangle {
                         radius: Theme.radiusSmall
                         color: partMode === modelData.code ? Theme.accent : Theme.card
@@ -99,7 +141,8 @@ Item {
             ComboBox {
                 model: ["ext4", "btrfs", "xfs"]
                 currentIndex: ["ext4", "btrfs", "xfs"].indexOf(fs)
-                onCurrentIndexChanged: { fs = model[currentIndex]; applyChoice() }
+                // A-30: смена ФС сбрасывает подтверждение.
+                onCurrentIndexChanged: { fs = model[currentIndex]; confirmed = false; applyChoice() }
                 Layout.preferredWidth: 120; Layout.preferredHeight: 40
                 background: Rectangle { radius: Theme.radiusSmall; color: Theme.card; border { color: Theme.border; width: 1 } }
                 contentItem: Text { text: parent.displayText; color: Theme.text; font.pixelSize: 15; verticalAlignment: Text.AlignVCenter; leftPadding: 12 }
@@ -127,13 +170,15 @@ Item {
                 delegate: ItemDelegate {
                     width: parent.width
                     height: 76
-                    enabled: !modelData.isIsoDisk
+                    enabled: !modelData.isIsoDisk && !modelData.blocked
                     highlighted: selectedDisk && selectedDisk.path === modelData.path
                     onClicked: {
                         selectedDisk = modelData
                         selectedPart = ""
+                        selectedEfi = ""
                         confirmed = false
                         applyChoice()
+                        refreshPartBoxes()
                     }
                     contentItem: ColumnLayout {
                         spacing: 2
@@ -151,8 +196,10 @@ Item {
                             Text {
                                 text: modelData.isIsoDisk
                                       ? (installer.uiLang === "en" ? "ISO disk — cannot be used" : "Диск с ISO — недоступен")
+                                      : modelData.blocked
+                                      ? (installer.uiLang === "en" ? "LVM/LUKS/RAID — cannot be used" : "LVM/LUKS/RAID — недоступен")
                                       : (selectedDisk && selectedDisk.path === modelData.path ? "✓" : "")
-                                color: modelData.isIsoDisk ? Theme.warning : Theme.accent2
+                                color: (modelData.isIsoDisk || modelData.blocked) ? Theme.warning : Theme.accent2
                                 font.pixelSize: 14
                             }
                         }
@@ -192,17 +239,60 @@ Item {
                     color: Theme.text; font { pixelSize: 15; bold: true }
                 }
                 ComboBox {
+                    id: rootPartBox
                     Layout.fillWidth: true
                     Layout.preferredHeight: 40
-                    model: selectedDisk ? selectedDisk.partitions.map(function(p) { return p.path + "  " + (p.fs || "") + "  " + p.sizeHuman }) : []
-                    onCurrentIndexChanged: {
+                    // Модель и currentIndex — из refreshPartBoxes():
+                    // раздела по умолчанию НЕТ (currentIndex -1, A-30).
+                    // onActivated — только действие пользователя.
+                    onActivated: {
                         if (selectedDisk && currentIndex >= 0) {
-                            selectedPart = selectedDisk.partitions[currentIndex].path
+                            selectedPart = screen.manualParts()[currentIndex].path
+                            confirmed = false
                             applyChoice()
                         }
                     }
                     background: Rectangle { radius: Theme.radiusSmall; color: Theme.bg; border { color: Theme.border; width: 1 } }
                     contentItem: Text { text: parent.displayText; color: Theme.text; font.pixelSize: 15; verticalAlignment: Text.AlignVCenter; leftPadding: 12 }
+                }
+            }
+        }
+
+        // Ручной режим: выбор EFI-раздела (A-06; только UEFI, только FAT).
+        Rectangle {
+            visible: partMode === "manual" && selectedDisk
+            Layout.fillWidth: true
+            Layout.preferredHeight: 110
+            radius: Theme.radius
+            color: Theme.card
+            border { color: Theme.border; width: 1 }
+            ColumnLayout {
+                anchors { fill: parent; margins: 16 }
+                spacing: 8
+                Text {
+                    text: installer.uiLang === "en" ? "EFI partition (UEFI only, FAT, will not be formatted)" : "EFI-раздел (только UEFI, FAT, не форматируется)"
+                    color: Theme.text; font { pixelSize: 15; bold: true }
+                }
+                ComboBox {
+                    id: efiPartBox
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 40
+                    // Модель и currentIndex — из refreshPartBoxes():
+                    // раздела по умолчанию нет (A-30).
+                    onActivated: {
+                        if (selectedDisk && currentIndex >= 0) {
+                            selectedEfi = screen.efiParts()[currentIndex].path
+                            confirmed = false
+                            applyChoice()
+                        }
+                    }
+                    background: Rectangle { radius: Theme.radiusSmall; color: Theme.bg; border { color: Theme.border; width: 1 } }
+                    contentItem: Text { text: parent.displayText; color: Theme.text; font.pixelSize: 15; verticalAlignment: Text.AlignVCenter; leftPadding: 12 }
+                }
+                Text {
+                    visible: screen.efiParts().length === 0
+                    text: installer.uiLang === "en" ? "No FAT partitions — create an EFI partition (FAT32) first." : "Нет FAT-разделов — создайте EFI-раздел (FAT32) заранее."
+                    color: Theme.warning; font.pixelSize: 13
                 }
             }
         }
@@ -269,7 +359,9 @@ Item {
                 Layout.fillWidth: true
             }
             Text {
-                text: (installer.uiLang === "en" ? "Partitions that will be erased:" : "Разделы, которые будут стёрты:")
+                text: (screen.partMode === "manual"
+                      ? (installer.uiLang === "en" ? "Partition that will be formatted:" : "Раздел, который будет отформатирован:")
+                      : (installer.uiLang === "en" ? "Partitions that will be erased:" : "Разделы, которые будут стёрты:"))
                       + "\n" + (confirmDialog.partList.length === 0
                                  ? (installer.uiLang === "en" ? "— none, the disk is empty —" : "— нет, диск пустой —")
                                  : confirmDialog.partList.map(function(p) { return "• " + p.path + " " + (p.fs || "") + " " + p.sizeHuman }).join("\n"))
@@ -277,9 +369,10 @@ Item {
                 Layout.fillWidth: true
             }
             Text {
+                // A-19: отмена после начала стирания = переустановка с нуля.
                 text: installer.uiLang === "en"
-                      ? "All data on these partitions will be lost. This cannot be undone."
-                      : "Все данные на этих разделах будут потеряны. Это нельзя отменить."
+                      ? "All data on these partitions will be lost. This cannot be undone. If the installation is interrupted after wiping starts, it must be started from scratch."
+                      : "Все данные на этих разделах будут потеряны. Это нельзя отменить. Если прервать установку после начала стирания, её придётся начинать с нуля."
                 color: Theme.textSecondary; font.pixelSize: 14; wrapMode: Text.WordWrap
                 Layout.fillWidth: true
             }

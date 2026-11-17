@@ -4,12 +4,12 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 // Экран 3 — Раскладка клавиатуры.
-// Основная раскладка — реальная: KEYMAP для движка (vconsole.conf).
+// Раскладка — ОДНА, реальная: KEYMAP для движка (vconsole.conf).
 // Поле проверки — реальное: setxkbmap переключает Live-сессию,
 // поэтому набранный текст действительно идёт выбранной раскладкой.
-// Дополнительные раскладки: работают в Live-сессии (setxkbmap
-// "ru,us") и показываются в итоге; в установленной системе
-// применяется основная раскладка (ограничение движка v1 — см. отчёт).
+// A-22: дополнительные раскладки УБРАНЫ из UI и из итога: движок
+// принимает только одну раскладку (KEYMAP), а запятая в setLiveKeymap
+// давала Live-сессии раскладки, которых нет в установленной системе.
 Item {
     id: screen
     property var installer
@@ -25,7 +25,6 @@ Item {
         { "code": "kz", "name": "Казахская" }
     ]
     property string primary: "ru"
-    property var extra: []
 
     function validate() { return primary !== "" }
 
@@ -35,10 +34,10 @@ Item {
     }
 
     function applyLive() {
-        var all = [primary].concat(extra)
-        bridge.setLiveKeymap(all.join(","))
+        // A-22: только основная раскладка; KEYMAPS из настроек удалён.
+        bridge.setLiveKeymap(primary)
         installer.settings["KEYMAP"] = primary
-        installer.settings["KEYMAPS"] = all.join(",")
+        delete installer.settings["KEYMAPS"]
     }
 
     ColumnLayout {
@@ -51,8 +50,8 @@ Item {
         }
         Text {
             text: installer.uiLang === "en"
-                  ? "Choose the main layout. It will be set on the installed system. The test field below uses the selected layout right now."
-                  : "Выберите основную раскладку. Она будет установлена в системе. Поле проверки ниже уже работает на выбранной раскладке."
+                  ? "Choose the layout. It will be set on the installed system. The test field below uses the selected layout right now."
+                  : "Выберите раскладку. Она будет установлена в системе. Поле проверки ниже уже работает на выбранной раскладке."
             color: Theme.textSecondary; font.pixelSize: 15; wrapMode: Text.WordWrap
             Layout.maximumWidth: 700
         }
@@ -117,63 +116,10 @@ Item {
                 }
             }
             }
-            // Правая колонка: доп. раскладки + поле проверки.
+            // Правая колонка: поле проверки.
             ColumnLayout {
                 Layout.preferredWidth: 320
                 spacing: 12
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 170
-                    radius: Theme.radius
-                    color: Theme.card
-                    border { color: Theme.border; width: 1 }
-                    ColumnLayout {
-                        anchors { fill: parent; margins: 16 }
-                        spacing: 8
-                        Text {
-                            text: installer.uiLang === "en" ? "Additional layouts" : "Дополнительные раскладки"
-                            color: Theme.text; font { pixelSize: 15; bold: true }
-                        }
-                        Repeater {
-                            model: ["us", "ru"]
-                            delegate: CheckBox {
-                                visible: modelData !== primary
-                                checked: extra.indexOf(modelData) !== -1
-                                text: modelData === "us" ? "Английская (US)" : "Русская"
-                                onCheckedChanged: {
-                                    if (checked && extra.indexOf(modelData) === -1)
-                                        extra.push(modelData)
-                                    else if (!checked)
-                                        extra = extra.filter(function(x) { return x !== modelData })
-                                    applyLive()
-                                }
-                                contentItem: Text {
-                                    text: parent.text; color: Theme.text
-                                    font.pixelSize: 14; leftPadding: parent.indicator.width + 8
-                                }
-                                indicator: Rectangle {
-                                    implicitWidth: 22; implicitHeight: 22
-                                    x: parent.leftPadding; y: parent.height / 2 - 11
-                                    radius: 6
-                                    color: parent.checked ? Theme.accent : "transparent"
-                                    border { color: Theme.accent; width: 2 }
-                                    Text {
-                                        anchors.centerIn: parent
-                                        text: parent.parent.checked ? "✓" : ""
-                                        color: Theme.text; font.pixelSize: 13
-                                    }
-                                }
-                            }
-                        }
-                        Text {
-                            text: installer.uiLang === "en"
-                                  ? "They work in the Live session now."
-                                  : "Работают в Live-сессии уже сейчас."
-                            color: Theme.textSecondary; font.pixelSize: 12
-                            wrapMode: Text.WordWrap; Layout.fillWidth: true
-                        }
-                    }
-                }
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 120

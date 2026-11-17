@@ -225,7 +225,8 @@ grep -q "pub fn has_mounts" "$GUI_SYSTEM" \
   && grep -q "if has_mounts(&dev)" "$GUI_SYSTEM" \
   && ok "T0i1: GUI не показывает диски со смонтированными разделами" \
   || bad "T0i1: GUI не показывает диски со смонтированными разделами"
-grep -q "self.disks = system::list_disks();" "$GUI_APP" \
+grep -q "let (disks, disk_errors) = system::list_disks();" "$GUI_APP" \
+  && grep -q "self.disks = disks;" "$GUI_APP" \
   && ok "T0i2: GUI обновляет список дисков при входе на шаг Разделы" \
   || bad "T0i2: GUI обновляет список дисков при входе на шаг Разделы"
 grep -q "let _ = std::fs::remove_file(CONF);" "$GUI_INSTALL" \

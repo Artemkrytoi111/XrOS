@@ -53,6 +53,18 @@ wpa_supplicant
 # Прежняя причина держать X11 (чёрный экран Wayland в QEMU)
 # относилась к Plasma 6.4 и требует повторной проверки в QEMU
 # перед сборкой — см. AUDIT-REPORT.md.
+# A-15: ядро Plasma — ЯВНО, а не транзитивно: plasma-workspace
+# (сессия plasma.desktop, plasmashell), kwin (оконный менеджер),
+# breeze и breeze-cursors (тема и курсоры по умолчанию),
+# mesa (драйверы GL для QEMU/железа), qt6-wayland (Wayland-клиент
+# для Qt-приложений живой системы). Раньше их не было в списке —
+# живая система зависела от того, что их притянет plasma-desktop.
+plasma-workspace
+kwin
+breeze
+breeze-cursors
+mesa
+qt6-wayland
 plasma-desktop
 plasma-nm
 plasma-pa
@@ -60,6 +72,34 @@ kscreen
 sddm
 konsole
 dolphin
+# Приложения (1.1, пункты 5 и 11): предустановлены в живой системе —
+# установщик копирует живую систему, поэтому они попадут и в
+# установленную. Имена проверены по репозиториям Arch (extra/multilib).
+# Браузер.
+firefox
+# Офис: libreoffice-fresh — актуальная ветка Arch (новые возможности,
+# rolling-выпуски); libreoffice-still — консервативная ветка с
+# исправлениями для тех, кому важнее стабильность, чем новизна.
+# Для rolling-дистрибутива живой системы берём fresh.
+libreoffice-fresh
+# KDE-приложения: редактор, просмотр PDF, просмотр изображений,
+# видеоплеер, аудиоплеер, торрент-клиент, почта, архиватор, скриншоты.
+kate
+okular
+gwenview
+haruna
+elisa
+ktorrent
+kmail
+ark
+spectacle
+# Wine: запуск Windows-программ. Пакет лежит в [multilib] (включён
+# в profile/pacman.conf и profile/airootfs/etc/pacman.conf);
+# 32-битные библиотеки тянет сам как зависимости, отдельно
+# lib32-пакеты не нужны. wine-gecko/wine-mono — опциональные
+# зависимости (заменители IE/.NET): не ставим, при первом запуске
+# Wine сам предложит их скачать.
+wine
 # Звук: plasma-pa без звукового сервера молчит — нужен провайдер
 # pulse-native-provider (pipewire-pulse) и менеджер сессии
 # pipewire-session-manager (wireplumber, требует и kwin).
@@ -67,8 +107,7 @@ pipewire
 pipewire-pulse
 wireplumber
 # Шрифты и графика
-# (breeze и mesa явно не нужны: их тянет kwin — breeze даёт
-#  BreezeDark и breeze_cursors, mesa — драйверы GL для QEMU/железа.
+# (breeze, breeze-cursors, mesa и kwin — явно в списке выше, A-15;
 #  xorg-server оставлен до повторной проверки Wayland в QEMU:
 #  в Plasma 6.8 от него ничего не зависит, кандидат на удаление.)
 ttf-dejavu
@@ -80,3 +119,12 @@ qt6-declarative
 libxkbcommon-x11
 # Безопасность
 ufw
+# R-06: gnupg и archlinux-keyring — ЯВНО, а не транзитивно (A-15).
+# gnupg нужен живой системе для xros-gpg-check и pacman-key
+# (проверка production-ключа A-40); archlinux-keyring — для
+# pacman-key --populate archlinux в установленной системе (R-07).
+# Цель (rsync) копирует живую систему, поэтому без этих пакетов
+# в живой системе их нет и в установленной: --init/--populate
+# падали бы, а проверка подписей пакетов не работала бы.
+gnupg
+archlinux-keyring
