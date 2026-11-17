@@ -66,7 +66,7 @@ pre code { background: none; border: 0; padding: 0; }
 .header-inner { display: flex; align-items: center; gap: 1rem; max-width: var(--max); margin: 0 auto; padding: .55rem 1.25rem; min-height: 64px; }
 .brand { display: flex; align-items: center; gap: .6rem; color: #fff; font-weight: 800; font-size: 1.35rem; letter-spacing: .04em; }
 .brand:hover { text-decoration: none; }
-.brand img { width: 36px; height: 36px; display: block; border-radius: 8px; }
+.brand img { height: 36px; width: auto; display: block; }
 .brand small { color: #999; font-weight: 500; font-size: .8rem; }
 .main-nav { margin-left: auto; }
 .main-nav ul { display: flex; gap: .25rem; list-style: none; margin: 0; padding: 0; flex-wrap: wrap; }
@@ -89,7 +89,7 @@ pre code { background: none; border: 0; padding: 0; }
 .hero-inner { display: flex; align-items: center; gap: 3rem; }
 .hero-text { flex: 1; min-width: 0; }
 .hero-logo { flex: 0 0 auto; }
-.hero-logo img { width: 180px; height: 180px; display: block; border-radius: 24px; }
+.hero-logo img { width: 300px; height: auto; display: block; }
 .hero h1 { font-size: clamp(2.4rem, 6vw, 3.2rem); line-height: 1.1; letter-spacing: -.01em; color: var(--heading); margin: 0 0 .8rem; }
 .hero h1 .x { color: var(--accent-2); }
 .hero p.lead { font-size: 1.2rem; line-height: 1.5; color: var(--muted); max-width: 640px; }
@@ -217,7 +217,7 @@ footer a:hover { color: var(--accent-dark); }
   .header-inner { flex-wrap: wrap; }
   .hero { padding: 4rem 0; }
   .hero-inner { flex-direction: column; gap: 1.5rem; text-align: center; }
-  .hero-logo img { width: 120px; height: 120px; }
+  .hero-logo img { width: 200px; height: auto; }
   .hero p.lead { margin-left: auto; margin-right: auto; }
   .btn-row { justify-content: center; }
 }
