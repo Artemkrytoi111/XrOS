@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Загрузка XrOS 1.0 Diamond: честный статус релиза, DEV ISO, системные требования и проверка ISO по SHA-256.">
+  <meta name="theme-color" content="#08080D">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="assets/css/style.css">
+  <title>Загрузка — XrOS 1.0 Diamond</title>
+</head>
+<body>
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html"><img src="favicon.svg" alt="Логотип XrOS" width="36" height="36"> XrOS <small>1.0 Diamond</small></a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="main-nav" aria-label="Открыть меню">☰</button>
+    <nav class="main-nav" id="main-nav" aria-label="Основная навигация">
+      <ul>
+        <li><a href="index.html">Главная</a></li>
+        <li><a href="download.html">Загрузка</a></li>
+        <li><a href="install.html">Установка</a></li>
+        <li><a href="security.html">Безопасность</a></li>
+        <li><a href="packages.html">Пакеты</a></li>
+        <li><a href="changelog.html">Изменения</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="container">
+    <section aria-labelledby="dl">
+      <h2 id="dl">Загрузка XrOS</h2>
+      <div class="note warn"><strong>Релиз пока не опубликован.</strong> Публичной ссылки на скачивание ISO сейчас нет — мы не публикуем фейковые кнопки. Как только релиз выйдет, ссылка появится на этой странице.</div>
+
+      <h3>Что уже готово</h3>
+      <p>DEV ISO собран и проверен <strong>14 ноября 2026 года</strong>:</p>
+      <ul>
+        <li><code>xros-1.0-x86_64.iso</code> — 1 822 580 736 байт (~1,70 ГиБ)</li>
+        <li>Гибридный ISO (BIOS + UEFI) — 1 823 131 648 байт</li>
+        <li>Проверка ISO: <strong>check-iso 12/12 PASS</strong></li>
+      </ul>
+      <p class="muted small">Полные SHA-256 не публикуются на сайте — на странице релиза будет указан контрольный хеш для проверки скачанного файла.</p>
+
+      <h3>Системные требования <span class="muted small">(ориентировочные, для live-системы)</span></h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Параметр</th><th>Требование</th></tr></thead>
+          <tbody>
+            <tr><td>Архитектура</td><td>x86_64</td></tr>
+            <tr><td>Загрузка</td><td>UEFI или BIOS (GRUB)</td></tr>
+            <tr><td>Оперативная память</td><td>4 ГБ (рекомендуется 8 ГБ)</td></tr>
+            <tr><td>Диск</td><td>20 ГБ для установки</td></tr>
+            <tr><td>Носитель</td><td>USB-накопитель от 8 ГБ</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted small">Требования — ориентир: live-система может запуститься и на более слабом железе, но комфортная работа и установка требуют указанных значений.</p>
+
+      <h3>Как проверить ISO (когда релиз выйдет)</h3>
+      <p>После скачивания сверьте контрольную сумму SHA-256 с указанной на странице релиза:</p>
+      <div class="code-block">
+        <button class="copy-btn" type="button" data-copy="cmd-sha">Копировать</button>
+        <pre><code id="cmd-sha">sha256sum xros-1.0-x86_64.iso</code></pre>
+      </div>
+      <p>Сумма должна совпасть полностью. Несовпадение — повод скачать файл заново и не устанавливать его.</p>
+
+      <h3>Что делать дальше</h3>
+      <ol class="steps">
+        <li><strong>Дождитесь релиза</strong><br>Ссылка на ISO появится на этой странице.</li>
+        <li><strong>Запишите ISO на USB</strong><br>Любой утилитой для записи образов (например, balenaEtcher, Rufus или <code>dd</code>).</li>
+        <li><strong>Загрузитесь с USB и установите</strong><br>Подробные шаги — на странице <a href="install.html">«Установка»</a>.</li>
+      </ol>
+      <p>Исходный код уже открыт: <a href="https://github.com/Artemkrytoi111/XrOS" rel="noopener">github.com/Artemkrytoi111/XrOS</a></p>
+    </section>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <div>
+      <strong>XrOS 1.0 Diamond</strong>
+      <p>Дистрибутив Linux на базе Arch Linux.<br>© <span id="year">2026</span> XrOS Project.</p>
+    </div>
+    <nav aria-label="Навигация в подвале">
+      <ul>
+        <li><a href="download.html">Загрузка</a></li>
+        <li><a href="install.html">Установка</a></li>
+        <li><a href="security.html">Безопасность</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+      </ul>
+    </nav>
+    <nav aria-label="Ссылки проекта">
+      <ul>
+        <li><a href="https://github.com/Artemkrytoi111/XrOS" rel="noopener">GitHub — XrOS</a></li>
+        <li><a href="https://github.com/Artemkrytoi111/XrOS-Security-Updates" rel="noopener">GitHub — Security Updates</a></li>
+      </ul>
+    </nav>
+  </div>
+</footer>
+<script src="assets/js/main.js"></script>
+</body>
+</html>

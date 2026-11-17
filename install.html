@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Установка XrOS 1.0 Diamond: запись USB, загрузка live-системы, графический установщик, разметка, пользователи, LUKS.">
+  <meta name="theme-color" content="#08080D">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="assets/css/style.css">
+  <title>Установка — XrOS 1.0 Diamond</title>
+</head>
+<body>
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html"><img src="favicon.svg" alt="Логотип XrOS" width="36" height="36"> XrOS <small>1.0 Diamond</small></a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="main-nav" aria-label="Открыть меню">☰</button>
+    <nav class="main-nav" id="main-nav" aria-label="Основная навигация">
+      <ul>
+        <li><a href="index.html">Главная</a></li>
+        <li><a href="download.html">Загрузка</a></li>
+        <li><a href="install.html">Установка</a></li>
+        <li><a href="security.html">Безопасность</a></li>
+        <li><a href="packages.html">Пакеты</a></li>
+        <li><a href="changelog.html">Изменения</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="container">
+    <section aria-labelledby="inst">
+      <h2 id="inst">Установка XrOS</h2>
+      <div class="note warn"><strong>Важно:</strong> установка стирает данные на выбранном диске. Сделайте резервную копию важных файлов до начала.</div>
+
+      <ol class="steps">
+        <li><strong>Скачайте ISO</strong><br>Когда релиз будет опубликован, ссылка появится на странице <a href="download.html">«Загрузка»</a>. Проверьте SHA-256 скачанного файла.</li>
+        <li><strong>Запишите ISO на USB</strong><br>Нужен накопитель от 8 ГБ. Подойдут balenaEtcher, Rufus или команда <code>dd</code> в Linux. Запись стирает всё содержимое USB.</li>
+        <li><strong>Загрузитесь с USB</strong><br>Включите компьютер, откройте меню загрузки (обычно F12, F8 или Esc) и выберите USB. Откроется live-система с KDE Plasma.</li>
+        <li><strong>Запустите установщик</strong><br>На рабочем столе live-системы — значок «XrOS Install». Установщик графический: bash-движок и Rust GUI.</li>
+        <li><strong>Разметка диска</strong><br>Выберите диск и схему разметки. При необходимости включите шифрование LUKS (опция, не обязательно).</li>
+        <li><strong>Пользователи и настройки</strong><br>Создайте пользователя, задайте пароль, выберите часовой пояс и раскладку клавиатуры.</li>
+        <li><strong>Установка и перезагрузка</strong><br>Дождитесь завершения установки, извлеките USB и перезагрузите компьютер. Система загрузится через GRUB (UEFI или BIOS).</li>
+      </ol>
+
+      <h3>LUKS — шифрование диска (опционально)</h3>
+      <p>LUKS — необязательная опция установщика, а не обязательное требование. Если включить шифрование, при каждой загрузке нужно будет вводить пароль от диска. Без LUKS система загружается без дополнительного пароля.</p>
+
+      <h3>После установки</h3>
+      <p>При первом запуске откроется приветствие (PyQt6). Обновите систему:</p>
+      <div class="code-block">
+        <button class="copy-btn" type="button" data-copy="cmd-upd">Копировать</button>
+        <pre><code id="cmd-upd">sudo pacman -Syu</code></pre>
+      </div>
+      <p>Подробнее о репозитории и пакетах — на странице <a href="packages.html">«Пакеты»</a>, о подписях — на странице <a href="security.html">«Безопасность»</a>.</p>
+
+      <h3>Примечания</h3>
+      <ul>
+        <li>Установщик работает только из live-системы — устанавливать «поверх» другой ОС нельзя.</li>
+        <li>Secure Boot не требуется и не настраивается установщиком.</li>
+        <li>Пароль GRUB не устанавливается — загрузчик работает без пароля.</li>
+      </ul>
+    </section>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <div>
+      <strong>XrOS 1.0 Diamond</strong>
+      <p>Дистрибутив Linux на базе Arch Linux.<br>© <span id="year">2026</span> XrOS Project.</p>
+    </div>
+    <nav aria-label="Навигация в подвале">
+      <ul>
+        <li><a href="download.html">Загрузка</a></li>
+        <li><a href="install.html">Установка</a></li>
+        <li><a href="security.html">Безопасность</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+      </ul>
+    </nav>
+    <nav aria-label="Ссылки проекта">
+      <ul>
+        <li><a href="https://github.com/Artemkrytoi111/XrOS" rel="noopener">GitHub — XrOS</a></li>
+        <li><a href="https://github.com/Artemkrytoi111/XrOS-Security-Updates" rel="noopener">GitHub — Security Updates</a></li>
+      </ul>
+    </nav>
+  </div>
+</footer>
+<script src="assets/js/main.js"></script>
+</body>
+</html>
