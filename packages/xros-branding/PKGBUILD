@@ -1,0 +1,56 @@
+# XrOS — пакет xros-branding: логотипы, обои, фон GRUB, баннер.
+# Канонические исходники — в branding/ (xros-logo.png,
+# xros-logo-small.png, wallpaper.png, wallpaper.jpg, grub-bg.jpg,
+# grub-bg.png, banner.txt — производные от xros-logo-real.png и
+# wallpaper-real.png, делает scripts/make-branding.py; banner.txt —
+# текстовый баннер, его исходник тоже лежит в branding/).
+# Файлы-источники лежат РЯДОМ с PKGBUILD:
+# их кладёт туда scripts/make-branding.py и этап сборки
+# (scripts/build.sh, этап 2); prepare() ниже проверяет, что копии
+# свежие, и роняет сборку при расхождении.
+
+pkgname=xros-branding
+pkgver=1.0
+pkgrel=2
+pkgdesc="Брендинг XrOS: логотипы, обои, тема GRUB"
+arch=('any')
+license=('custom:XrOS')
+options=('!debug')
+source=('xros-logo.png'
+        'xros-logo-small.png'
+        'wallpaper.png'
+        'wallpaper.jpg'
+        'grub-bg.jpg'
+        'grub-bg.png'
+        'banner.txt')
+sha256sums=('2a4730d06dfb2166c2dd69dadd88e7a3940c3d737ca7a3a78966d4619cfe07f7'
+            '9333c51a685d1187ad17c85e78a3e37fa527556d660e905fefbf8ba14c0a7497'
+            '949df7a8b5cd0d321d8b5f7c2c14da49de41bc4392478f8b559281293e002733'
+            '43fbef3490f3fb135bccfc823e41dafa92aa2ecf8f7c57d92ac7c0004fb4d37c'
+            '0e1bfe18320e0dbbdd9277dd65ad60fa13f4662902e35f77fa332679f16b32c9'
+            'ac7bb74a3478deca01e1ea70985c3488f5c50e09736b994e826a92d92ad75e0a'
+            '3ee7e20abfaaa849f3882e456adee0fe2127bd285324bcf9c6a8766d1b65bb82')
+
+prepare() {
+  local f
+  for f in xros-logo.png xros-logo-small.png wallpaper.png wallpaper.jpg grub-bg.jpg grub-bg.png; do
+    if ! cmp -s "$startdir/../../branding/$f" "$srcdir/$f"; then
+      error "$f отличается от branding/$f: обновите staged-копию (см. scripts/build.sh, этап 2)"
+      exit 1
+    fi
+  done
+  if ! cmp -s "$startdir/../../branding/banner.txt" "$srcdir/banner.txt"; then
+    error "banner.txt отличается от branding/banner.txt: обновите staged-копию"
+    exit 1
+  fi
+}
+
+package() {
+  install -Dm644 xros-logo.png "$pkgdir/usr/share/xros/xros-logo.png"
+  install -Dm644 xros-logo-small.png "$pkgdir/usr/share/xros/xros-logo-small.png"
+  install -Dm644 wallpaper.png "$pkgdir/usr/share/xros/wallpaper.png"
+  install -Dm644 wallpaper.jpg "$pkgdir/usr/share/xros/wallpaper.jpg"
+  install -Dm644 grub-bg.jpg "$pkgdir/usr/share/xros/grub-bg.jpg"
+  install -Dm644 grub-bg.png "$pkgdir/usr/share/xros/grub-bg.png"
+  install -Dm644 banner.txt "$pkgdir/usr/share/xros/banner.txt"
+}

@@ -1,0 +1,46 @@
+# build-env: собственный изолированный build environment XrOS
+# (Arch-rootfs, кэш пакетов, bootstrap-тарболл, логи — вне git)
+build-env/
+
+# A-27: секреты и ключи — никогда в git (даже случайно):
+# приватные ключи и сертификаты, окружение, учётки, бэкапы подписей.
+*.pem
+*.key
+.env*
+*credentials*
+*secret*
+*.sig.bak
+# Бэкапы правок (.bak) — рабочие копии, в git не нужны (иначе
+# неосторожный `git add -A` добавит их в коммит).
+*.bak
+# Копия публичного ключа в живую систему — артефакт сборки
+# (scripts/build.sh, шаг 8, копирует из xros-gpg-prod/); в git не нужна.
+profile/airootfs/usr/share/xros/xros-public.key
+# Production публичный ключ (только подтверждённый публичный ключ;
+# приватный ключ — никогда): разрешаем именно этот файл, хотя *.key
+# выше игнорирует ключи в целом.
+!xros-gpg-prod/xros-public.key
+
+# Сборка и артефакты (не коммитим — пересобираются из исходников)
+# out/: готовые ISO и логи сборки
+out/
+# work/: рабочие каталоги mkarchiso
+work/
+# experiments/: QEMU-прогоны — логи, скриншоты, образы дисков
+experiments/
+*.iso
+*.img
+*.log
+__pycache__/
+*.pyc
+# Локальные бэкапы ISO/rootfs (вне git, только в ~/workspace/xros-backups)
+*.qcow2
+# build-staging: копия Diamond в packages/ пересоздаётся шагом 5 build.sh
+packages/xros-installer/xros-installer-diamond/
+# tools-debs/: .deb для восстановления хоста после перезагрузок (не исходники проекта)
+tools-debs/
+# website/: сайт XrOS — отдельный артефакт, ведётся в side-chat
+website/
+
+# Rust build artifacts (cargo check/build)
+src/*/target/

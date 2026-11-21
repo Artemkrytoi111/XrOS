@@ -1467,8 +1467,7 @@ run_install() {
   # os-release: те же поля версии, что в живой системе, плюс
   # VARIANT_ID=installed — штатный маркер os-release(5) для отличия
   # установленной системы от живой (hostnamectl его показывает).
-  # PLACEHOLDER: URL https://xros.example/ — домен не существует,
-  # заменить на настоящий при публикации (как в живом os-release).
+  # URL не публикуем: домена проекта пока нет.
   # /etc/os-release — ссылка на /usr/lib/os-release, как в живой
   # системе; пересоздаём её явно, чтобы она не указывала в никуда.
   cat > "$TARGET/usr/lib/os-release" <<'OS_EOF' \
@@ -1483,11 +1482,6 @@ VERSION_ID="1.0"
 VARIANT="Installed system"
 VARIANT_ID=installed
 ANSI_COLOR="38;2;139;0;255"
-# PLACEHOLDER: URL https://xros.example/ — домен не существует, заменить на настоящий при публикации.
-HOME_URL="https://xros.example/"
-DOCUMENTATION_URL="https://xros.example/"
-SUPPORT_URL="https://xros.example/"
-BUG_REPORT_URL="https://xros.example/"
 LOGO=xros
 IMAGE_ID=xros
 IMAGE_VERSION=1.0

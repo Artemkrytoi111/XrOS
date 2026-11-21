@@ -1,0 +1,51 @@
+# XrOS — пакет xros-cli: команда `xros` (Rust).
+# Бинарь собран заранее из src/xros-cli (cargo build --release
+# --offline в chroot сборки: кэш cargo с libc 0.2 лежит там
+# в /home/hatch/.cargo). Это *-bin-подход: исходники — в проекте,
+# в src/xros-cli, а в пакете — собранный из них бинарь.
+# (В другом проекте CLI собирался из исходников прямо в PKGBUILD;
+#  здесь оставлен *-bin, потому что на хосте сборки нет cargo-кэша
+#  и пересборка при каждой сборке пакета не нужна — команда крошечная
+#  и меняется редко. Если появится cargo-кэш на хосте — перевести
+#  на build() из исходников.)
+# Файл-источник лежит РЯДОМ с PKGBUILD:
+# его кладёт туда этап сборки (scripts/build.sh) из актуального
+# исходника; prepare() ниже проверяет, что бинарь свежий.
+# Автообновления: юниты xros-update.* ШЬЮТСЯ в пакет, но по
+# умолчанию ВЫКЛЮЧЕНЫ (таймер нигде не включается — ни в живой
+# системе, ни установщиком). Включать их нельзя, пока нет
+# подписанного репозитория [xros]; модель обновлений — см. README
+# репозитория и ARCHITECTURE.md.
+
+pkgname=xros-cli
+pkgver=1.0
+pkgrel=2
+pkgdesc="Команда xros: информация о системе и обновление"
+arch=('x86_64')
+license=('custom:XrOS')
+depends=('glibc' 'xros-branding')
+options=('!debug' '!strip')
+# RECOVERY-01 Phase E (13.11.2026): '!strip' — makepkg по умолчанию
+# strip-ит ELF-бинари, и CLI в пакете получался stripped (64120ea3…,
+# 395 792 B) вместо официального unstripped (9c67cfdc…, 516 720 B).
+# Та же проблема, что у GUI в R-09/R-10 (там исправлено в R-10).
+source=('xros'
+        'xros-update.service'
+        'xros-update.timer')
+sha256sums=('9c67cfdcc1b50998e05be1d0c9efd6d1325473731b8b7de6971ebe049954e1aa'
+            '24d4960e4fa92535544403021bf41fa90623f57c7786b3fe52fbbb41c16fa7ac'
+            '7fc4dd5f22bd065707f7eb1bfe6facffe8167e936b60b8bddc525d065a4c41d4')
+
+prepare() {
+  # Бинарь: ни один исходник не должен быть новее бинаря.
+  if [[ -n $(find "$startdir/../../src/xros-cli" -type f -newer "$srcdir/xros" -print -quit) ]]; then
+    error "бинарь xros старше исходников src/xros-cli: пересоберите (cargo build --release --offline)"
+    exit 1
+  fi
+}
+
+package() {
+  install -Dm755 xros "$pkgdir/usr/local/bin/xros"
+  install -Dm644 xros-update.service "$pkgdir/usr/lib/systemd/system/xros-update.service"
+  install -Dm644 xros-update.timer "$pkgdir/usr/lib/systemd/system/xros-update.timer"
+}
