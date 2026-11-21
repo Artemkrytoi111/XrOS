@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="История XrOS 1.0 Diamond: этапы разработки, DEV ISO 14.11.2026, ротация ключа подписи и планы.">
+  <meta name="theme-color" content="#F6F9FC">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="assets/css/style.css">
+  <title>Изменения — XrOS 1.0 Diamond</title>
+</head>
+<body>
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html"><img src="packages/xros-branding/xros-logo-small.png" alt="Логотип XrOS" width="53" height="36"> XrOS <small>1.0 Diamond</small></a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="main-nav" aria-label="Открыть меню">☰</button>
+    <nav class="main-nav" id="main-nav" aria-label="Основная навигация">
+      <ul>
+        <li><a href="index.html">Главная</a></li>
+        <li><a href="download.html">Загрузка</a></li>
+        <li><a href="install.html">Установка</a></li>
+        <li><a href="security.html">Безопасность</a></li>
+        <li><a href="packages.html">Пакеты</a></li>
+        <li><a href="changelog.html">Изменения</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="container">
+    <section aria-labelledby="log">
+      <h2 id="log">История и статус XrOS</h2>
+      <ol class="timeline">
+        <li>
+          <time datetime="2026-11-12">12 ноября 2026</time>
+          <p><strong>Предсборочный аудит и финальная проверка.</strong> Найдены и зафиксированы три проблемы высокой важности: защита RAID, проверка SHA-256 и обработка ошибок GPG. Решение: исправления обязательны до сборки ISO.</p>
+        </li>
+        <li>
+          <time datetime="2026-11-13">13 ноября 2026</time>
+          <p><strong>Этапы проверки R-22, R-20, R-10, R-11.</strong> Полный набор тестов: 919 пройдено, 0 провалено, 7 пропущено. Сборка DEV ISO на хосте заблокирована ограничениями среды — выбран путь через Arch VM.</p>
+        </li>
+        <li>
+          <time datetime="2026-11-14">14 ноября 2026</time>
+          <p><strong>DEV ISO собран и проверен.</strong> Первая попытка сорвалась из-за сети; после смены зеркал ISO построен: xros-1.0-x86_64.iso (1 822 580 736 Б) и гибридный ISO (1 823 131 648 Б), check-iso 12/12 PASS. Тема GRUB Sapphire готова.</p>
+        </li>
+        <li>
+          <time datetime="2026-11-15">15 ноября 2026</time>
+          <p><strong>Ротация ключа и публикация обновлений.</strong> Создан новый production-ключ 9E71EDB1…, все подписи проверены (7/7), опубликован репозиторий обновлений XrOS-Security-Updates. Начался переходный период — минимум 4 недели, до 13 декабря 2026 года. Пакеты: xros-installer 1.0-6, xros-welcome 1.0-3, xros-cli 1.0-2.</p>
+        </li>
+        <li>
+          <time datetime="2026-11-16">16–17 ноября 2026</time>
+          <p><strong>Аудит скрипта резервного копирования GPG.</strong> Версия v12 прошла независимый аудит; подготовлена версия v13 с исправлениями. Проверка на Windows и runtime-валидация ещё предстоят.</p>
+        </li>
+      </ol>
+
+      <h3>Что дальше</h3>
+      <ul>
+        <li>Завершение переходного периода ротации ключа — 13 декабря 2026 года.</li>
+        <li>Публикация релиза 1.0 Diamond — ссылка на ISO появится на странице <a href="download.html">«Загрузка»</a>.</li>
+        <li>Живой тест загрузки (live boot) и проверка раскладки клавиатуры.</li>
+        <li>Runtime-валидация скрипта резервного копирования на Windows 11.</li>
+      </ul>
+      <div class="note warn"><strong>Статус:</strong> релиз не опубликован. Эта страница обновляется по мере выхода новых этапов — дата релиза будет указана здесь и на странице загрузки.</div>
+    </section>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <div>
+      <strong>XrOS 1.0 Diamond</strong>
+      <p>Дистрибутив Linux на базе Arch Linux.<br>© <span id="year">2026</span> XrOS Project.</p>
+    </div>
+    <nav aria-label="Навигация в подвале">
+      <p class="foot-head">Разделы</p>
+      <ul>
+        <li><a href="download.html">Загрузка</a></li>
+        <li><a href="install.html">Установка</a></li>
+        <li><a href="security.html">Безопасность</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+      </ul>
+    </nav>
+    <nav aria-label="Ссылки проекта">
+      <p class="foot-head">Проект</p>
+      <ul>
+        <li><a href="https://github.com/Artemkrytoi111/XrOS" rel="noopener">GitHub — XrOS</a></li>
+        <li><a href="https://github.com/Artemkrytoi111/XrOS-Security-Updates" rel="noopener">GitHub — Security Updates</a></li>
+      </ul>
+    </nav>
+  </div>
+  <div class="container footer-bottom">XrOS — свободное программное обеспечение на базе Arch Linux.</div>
+</footer>
+<script src="assets/js/main.js"></script>
+</body>
+</html>

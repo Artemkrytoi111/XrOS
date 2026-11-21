@@ -1,0 +1,13 @@
+# XrOS — ручной запуск окна приветствия из меню приложений.
+# Флаг --manual: обойти проверку Hidden=true — отключение автозапуска
+# не должно блокировать окно, открытое пользователем вручную.
+# (Автозапуск — только /etc/xdg/autostart/xros-welcome.desktop.)
+[Desktop Entry]
+Type=Application
+Name=Добро пожаловать в XrOS
+Comment=Окно приветствия XrOS
+Exec=/usr/local/bin/xros-welcome-gui --manual
+Icon=/usr/share/xros/xros-logo.png
+Terminal=false
+Categories=System;
+OnlyShowIn=KDE;

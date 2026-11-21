@@ -500,7 +500,7 @@ install_build_tools() {
   # нет). Собственная зависимость xros-branding ставится отдельно:
   # сначала собирается и устанавливается пакет xros-branding
   # (pacman -U внутри rootfs), и только потом остальные три пакета.
-  chroot_env pacman -Sy --noconfirm base-devel rust grub git pacman-contrib \
+  chroot_env pacman -Sy --needed --noconfirm base-devel rust grub git pacman-contrib \
     archiso squashfs-tools libisoburn mtools \
     dialog rsync parted dosfstools e2fsprogs btrfs-progs xfsprogs gptfdisk \
     efibootmgr os-prober libxkbcommon-x11 python-pyqt6 \

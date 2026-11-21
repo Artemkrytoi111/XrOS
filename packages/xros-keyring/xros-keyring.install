@@ -1,0 +1,78 @@
+#!/bin/bash
+# xros-keyring.install — переходный пакет ключей XrOS.
+# post_install / post_upgrade: импортирует новый production-ключ
+# в keyring установленной системы и локально подписывает его.
+# После этого система доверяет ОБОИМ ключам (старому и новому).
+# Старый ключ НЕ удаляется. Удаление пакета НЕ удаляет доверие
+# к новому ключу (post_remove намеренно отсутствует).
+# Идемпотентно: повторная установка/обновление безопасны.
+# При любой ошибке — громкое сообщение и код возврата 1.
+# ВНИМАНИЕ: pacman при ошибке post_install всё равно считает пакет
+# установленным; при сбое переустановите пакет (pacman -S xros-keyring).
+
+NEW_FPR="9E71EDB1A341779B7F0B99EAD1A3963AA4E45CEB"
+KEY_FILE="/usr/share/xros/xros-public-new.key"
+# Стандартное расположение keyring pacman в Arch/XrOS. Указано явно:
+# scriptlet выполняется внутри chroot корня установки, и pacman-key
+# без --gpgdir читал бы GPGDir из /etc/pacman.conf, чьи абсолютные
+# пути снаружи chroot недействительны внутри него.
+GPGDIR="/etc/pacman.d/gnupg"
+
+_xros_keyring_add_key() {
+  # 0. Файл ключа должен быть на месте.
+  if [[ ! -f "$KEY_FILE" ]]; then
+    echo "xros-keyring: ОШИБКА: нет файла ключа $KEY_FILE — новый ключ не импортирован" >&2
+    return 1
+  fi
+
+  # 1. Предварительная проверка отпечатка в файле (до импорта в keyring).
+  # Повреждённый или чужой ключ не должен попасть в keyring вообще.
+  # gpg запускается с временным GNUPGHOME: при установке через pacman
+  # scriptlet выполняется внутри chroot корня установки, где домашний
+  # каталог по умолчанию может отсутствовать (gpg без --homedir падает
+  # с "Fatal: can't create directory").
+  local file_fpr _tmp_gnupg
+  _tmp_gnupg="$(mktemp -d)"
+  chmod 700 "$_tmp_gnupg"
+  file_fpr="$(GNUPGHOME="$_tmp_gnupg" gpg --batch --show-keys --with-colons "$KEY_FILE" 2>/dev/null | awk -F: '$1 == "fpr" {print $10}')"
+  rm -rf "$_tmp_gnupg"
+  if [[ "$file_fpr" != "$NEW_FPR" ]]; then
+    echo "xros-keyring: ОШИБКА: отпечаток ключа в $KEY_FILE ($file_fpr) не совпадает с ожидаемым $NEW_FPR — новый ключ не импортирован" >&2
+    return 1
+  fi
+
+  # 2. Импорт ключа.
+  if ! pacman-key --gpgdir "$GPGDIR" --add "$KEY_FILE" >/dev/null 2>&1; then
+    echo "xros-keyring: ОШИБКА: pacman-key --add не удался — новый ключ не импортирован" >&2
+    return 1
+  fi
+
+  # 3. Проверка отпечатка импортированного ключа.
+  if ! pacman-key --gpgdir "$GPGDIR" --finger "$NEW_FPR" >/dev/null 2>&1; then
+    echo "xros-keyring: ОШИБКА: ключ $NEW_FPR не найден в keyring после импорта" >&2
+    return 1
+  fi
+
+  # 4. Локальная подпись нового ключа (без неё pacman не доверяет ключу).
+  if ! pacman-key --gpgdir "$GPGDIR" --lsign-key "$NEW_FPR" >/dev/null 2>&1; then
+    echo "xros-keyring: ОШИБКА: pacman-key --lsign-key не удался — новому ключу не доверяют" >&2
+    return 1
+  fi
+
+  # 5. Повторная проверка: ключ есть и доверие полное ([  full  ]).
+  if ! pacman-key --gpgdir "$GPGDIR" --list-keys "$NEW_FPR" 2>/dev/null | grep -q "full"; then
+    echo "xros-keyring: ОШИБКА: ключ $NEW_FPR в keyring, но доверие не полное — переустановите пакет" >&2
+    return 1
+  fi
+
+  echo "xros-keyring: новый production-ключ $NEW_FPR импортирован и локально подписан; система доверяет обоим ключам"
+  return 0
+}
+
+post_install() {
+  _xros_keyring_add_key
+}
+
+post_upgrade() {
+  _xros_keyring_add_key
+}

@@ -1,0 +1,122 @@
+# XrOS — тема GRUB «Sapphire» v2 (14.11.2026, референс-дизайн владелицы).
+# Фирменная система Sapphire: фон #05070F, доп. фон #0A1020,
+# акцент #2563EB, фиолетовый #7C3AED (правый конец градиента выделения),
+# светлый акцент #7FB3FF, текст #EAF2FF,
+# вторичный текст #93A7C9, границы #1E3A5F.
+# Фон — обои владелицы Sapphire (grub-bg.jpg/png, 1280x720): тёмный
+# сине-голубой, горы, большой логотип «X» справа, текст «XrOS Sapphire»
+# по центру. На референсе обои «Diamond» — это ТОЛЬКО референс
+# компоновки; обои Sapphire НЕ заменяются. Логотип и текст уже вшиты
+# в картинку, поэтому title-text ПУСТОЙ — тема не накладывает
+# дублирующий логотип поверх (ключ title-text: оставлен намеренно:
+# его проверяет xros-diagnose.sh, §10в).
+# Компоновка v2 (замерено по обоям Sapphire, 14.11.2026):
+# логотип «XrOS Sapphire» + слоган заканчиваются на y≈385 (53,5%),
+# большой «X» начинается с x≈750 (58,6%), яркая полоса снега —
+# y≈590-610 (82-85%). Поэтому тёмная панель меню (menu_panel.png,
+# alpha ~0.88 — читаемость даёт сама панель, как на референсе):
+# left 19%, top 55%, width 38% (правый край 57% — зазор до «X»),
+# height 29%. Меню внутри панели с отступом 2% с каждой стороны.
+# Подпись версии GRUB — вверху справа (реальная версия из build-env —
+# 2.16, а не 2.12 с референса). Внизу — линия-разделитель (line.png),
+# подсказки клавиш слева и обратный отсчёт справа.
+# Шрифты DejaVu есть в live-системе (пакет ttf-dejavu); .pf2 лежат рядом.
+# Доступные размеры: 12, 14 и Bold 16 — item_font остаётся 14.
+
+title-text: ""
+title-font: "DejaVu Sans Bold 16"
+title-color: "#ffffff"
+desktop-image: "grub-bg.jpg"
+desktop-color: "#05070f"
+terminal-box: "terminal_box_*.png"
+
+# Панель меню — полупрозрачный тёмный прямоугольник (menu_panel.png).
+# Компонент + image объявлен ДО boot_menu, поэтому меню рисуется
+# поверх панели. Если GRUB проигнорирует alpha-канал, панель станет
+# просто тёмной — читаемость сохранится и в этом случае.
++ image {
+  file = "menu_panel.png"
+  left = 19%
+  top = 55%
+  width = 38%
+  height = 29%
+}
+
++ boot_menu {
+  left = 21%
+  top = 57%
+  width = 34%
+  height = 25%
+  item_font = "DejaVu Sans 14"
+  item_color = "#eaf2ff"
+  # selected_item_color: обязан быть #f5f3fa — его проверяет
+  # xros-diagnose.sh (§10в). Контраст #f5f3fa на градиенте выделения
+  # #2563eb -> #7c3aed (select_*.png): 4,69:1 слева, ~5,2:1 справа
+  # (>= 4,5:1, текст читается на всём протяжении градиента).
+  selected_item_color = "#f5f3fa"
+  item_height = 28
+  item_padding = 8
+  item_spacing = 5
+  icon_width = 24
+  icon_height = 24
+  item_icon_space = 10
+  selected_item_pixmap_style = "select_*.png"
+}
+
+# Версия GRUB вверху справа (реальная — 2.16 из build-env rootfs,
+# см. docs/boot-bios-grub.md; на референсе 2.12 — устарело).
++ label {
+  top = 3%
+  left = 72%
+  width = 26%
+  align = "right"
+  text = "GRUB 2.16 | XrOS"
+  font = "DejaVu Sans 12"
+  color = "#eaf2ff"
+}
+
+# Тонкая градиентная линия-разделитель над нижней панелью.
++ image {
+  file = "line.png"
+  left = 5%
+  top = 87.5%
+  width = 90%
+  height = 3
+}
+
+# Подсказки клавиш (как на референсе; рамки клавиш GRUB-текстом
+# не рисуются — только текст с разделителями).
++ label {
+  top = 90.5%
+  left = 5%
+  width = 55%
+  align = "left"
+  text = "↑↓ Select • Enter Boot • e Edit • c Command line"
+  font = "DejaVu Sans 12"
+  color = "#93a7c9"
+}
+
++ progress_bar {
+  id = "__timeout__"
+  left = 70%
+  top = 90%
+  width = 25%
+  height = 22
+  text = "Booting in %d seconds..."
+  font = "DejaVu Sans 12"
+  text_color = "#eaf2ff"
+  fg_color = "#2563eb"
+  bg_color = "#0a1020"
+  border_color = "#1e3a5f"
+  align = "center"
+}
+
+# Обратный отсчёт (история fixed6/fixed9, 11.11.2026): @TIMEOUT@ GRUB
+# 2.16 НЕ подставляет вообще, а @TIMEOUT_NOTIFICATION_*@ — только как
+# ВСЁ значение text (точное grub_strcmp, не подстрока; доказано
+# fixed7/fixed8 + исходником gui_progress_bar.c). Правильно: text —
+# это printf-шаблон, draw_text() делает grub_xasprintf(template,
+# |value|) — %d заменяется на секунды до автозагрузки.
+# text = "Booting in %d seconds..." рендерится "Booting in 7 seconds...".
+# id "__timeout__" обязан быть РОВНО ОДИН на весь theme.txt и именно
+# на progress_bar (в label — никогда).

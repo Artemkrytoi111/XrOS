@@ -1,0 +1,12 @@
+##
+## XrOS — зеркала pacman для живой системы (1.1, пункт 1).
+## Проверены на Arch VM (14.11.2026): dotsrc и osbeck — самые быстрые,
+## metalgamer — запасное. Порядок = приоритет.
+## Без этого файла [core]/[extra]/[multilib] делают
+## Include = /etc/pacman.d/mirrorlist, а файл в живой системе брался
+## из build-окружения и мог оказаться пустым («no servers configured»).
+##
+
+Server = https://mirrors.dotsrc.org/archlinux/$repo/os/$arch
+Server = https://mirror.osbeck.com/archlinux/$repo/os/$arch
+Server = https://mirror.metalgamer.eu/archlinux/$repo/os/$arch

@@ -1008,7 +1008,14 @@ if [[ -n "$NONINTERACTIVE" ]]; then
   # Имя компьютера — только безопасные символы: иначе перевод строки
   # или пробелы из GUI сломали бы /etc/hostname и /etc/hosts.
   HOSTNAME=$(printf '%s' "$HOSTNAME" | tr -cd 'a-zA-Z0-9.-')
-  [[ -n "$HOSTNAME" ]] || HOSTNAME="xros-os"
+  # RFC 1123: label не начинается/не заканчивается точкой или дефисом,
+  # нет двойных точек. Не прошло — заменяем на безопасное значение.
+  if [[ "$HOSTNAME" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]] \
+     && [[ "$HOSTNAME" != *..* && "$HOSTNAME" != *.-* && "$HOSTNAME" != *-. ]]; then
+    :
+  else
+    HOSTNAME="xros-os"
+  fi
   FULLNAME=$(printf '%s' "${FULLNAME:-}" | tr -d '\r\n')
   case "${FS:-ext4}" in ext4|btrfs|xfs) ;; *) FS="ext4" ;; esac
   # Часовой пояс и раскладка из конфига — не из фиксированного списка
@@ -1144,7 +1151,10 @@ else
   # пробелы из диалога сломали бы /etc/hostname и /etc/hosts
   # (в неинтерактивном режиме та же чистка есть с первого аудита).
   HOSTNAME=$(printf '%s' "$HOSTNAME" | tr -cd 'a-zA-Z0-9.-')
-  [[ -n "$HOSTNAME" ]] || HOSTNAME="xros-os"
+  if ! [[ "$HOSTNAME" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]] \
+     || [[ "$HOSTNAME" == *..* || "$HOSTNAME" == *.-* || "$HOSTNAME" == *-. ]]; then
+    HOSTNAME="xros-os"
+  fi
   # A-31: имя пользователя — в цикле: зарезервированное системное имя
   # отклоняется с объяснением, а не падает молча (см. xros_reserved_user).
   while true; do
@@ -1644,8 +1654,12 @@ GRUBEOF
 locale-gen
 systemd-machine-id-setup || true
 useradd -m -G wheel,audio,video,optical,storage -s /bin/bash -c $FULLNAME_Q $USERNAME_Q || useradd -m -G wheel -s /bin/bash -c $FULLNAME_Q $USERNAME_Q
-echo root:$ROOTPASS_Q | chpasswd
-echo $USERNAME_Q:$USERPASS_Q | chpasswd
+# stderr chpasswd — в отдельный файл, а не в $LOG: shadow в некоторых
+# версиях печатает в stderr строку login:password при синтаксической
+# ошибке, и пароль попал бы в журнал установки (успешный путь его не
+# содержит). Сам файл удаляется сразу после chroot (см. ниже).
+echo root:$ROOTPASS_Q | chpasswd 2>>/tmp/xros-chpasswd.err
+echo $USERNAME_Q:$USERPASS_Q | chpasswd 2>>/tmp/xros-chpasswd.err
 # Обои XrOS для нового пользователя (fixed10, D4): тот же one-shot
 # механизм, что и в живой системе (xros-set-wallpaper + autostart).
 # Готовый appletsrc НЕ копируем: Plasma 6.8 мигрирует чужой appletsrc
@@ -1666,6 +1680,10 @@ chmod 440 /etc/sudoers.d/wheel
 systemctl enable NetworkManager.service
 mkinitcpio -P
 CHROOT_EOF
+  # chpasswd пишет stderr (включая строку login:password при синтаксической
+  # ошибке) в изолированный файл: в $LOG он не попадает, а живёт только
+  # до конца установки. При сбое chroot файл полезен для диагностики.
+  rm -f "$TARGET/tmp/xros-chpasswd.err"
   if [[ $UEFI -eq 1 ]]; then
     arch-chroot "$TARGET" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=XrOS --recheck >>"$LOG" 2>&1 \
       || { say "ОШИБКА: grub-install (UEFI) не удался — см. $LOG"; exit 1; }

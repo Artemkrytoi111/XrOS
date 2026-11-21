@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Установить XrOS
+Comment=Установить XrOS на диск
+Exec=/usr/local/bin/xros-install-gui
+Icon=/usr/share/xros/xros-logo.png
+Terminal=false
+Categories=System;

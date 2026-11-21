@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Безопасность XrOS: SigLevel Required, подписи пакетов GPG, ротация ключа, xros-keyring и восстановление.">
+  <meta name="theme-color" content="#F6F9FC">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="assets/css/style.css">
+  <title>Безопасность — XrOS 1.0 Diamond</title>
+</head>
+<body>
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html"><img src="packages/xros-branding/xros-logo-small.png" alt="Логотип XrOS" width="53" height="36"> XrOS <small>1.0 Diamond</small></a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="main-nav" aria-label="Открыть меню">☰</button>
+    <nav class="main-nav" id="main-nav" aria-label="Основная навигация">
+      <ul>
+        <li><a href="index.html">Главная</a></li>
+        <li><a href="download.html">Загрузка</a></li>
+        <li><a href="install.html">Установка</a></li>
+        <li><a href="security.html">Безопасность</a></li>
+        <li><a href="packages.html">Пакеты</a></li>
+        <li><a href="changelog.html">Изменения</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="container">
+    <section aria-labelledby="sec">
+      <h2 id="sec">Безопасность XrOS</h2>
+
+      <h3>SigLevel = Required</h3>
+      <p>В XrOS включён строгий режим проверки подписей: <code>SigLevel = Required</code>. Это значит, что pacman устанавливает только пакеты, подписанные доверенным ключом проекта, и только из подписанной базы репозитория. Неподписанный или подменённый пакет не установится.</p>
+
+      <h3>Подписи GPG</h3>
+      <p>Все пакеты репозитория обновлений и сама база репозитория подписаны. Репозиторий обновлений:</p>
+      <div class="code-block">
+        <button class="copy-btn" type="button" data-copy="cmd-repo">Копировать</button>
+        <pre><code id="cmd-repo">https://artemkrytoi111.github.io/XrOS-Security-Updates/xros/os/$arch</code></pre>
+      </div>
+
+      <h3>Ротация ключа</h3>
+      <p>Идёт переход на новый production-ключ подписи:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Ключ</th><th>Отпечаток</th><th>Статус</th></tr></thead>
+          <tbody>
+            <tr><td>Старый production-ключ</td><td><code>B16629E8B17270764AED33013D1718A6EE45C94C</code></td><td>Ed25519, заменяется</td></tr>
+            <tr><td>Новый production-ключ</td><td><code>9E71EDB1A341779B7F0B99EAD1A3963AA4E45CEB</code></td><td>Действующий, переходный период</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Переходный пакет <code>xros-keyring</code> доставляет новый ключ в систему. Переходный период — минимум 4 недели, до <strong>13 декабря 2026 года</strong>. В течение этого времени действуют оба ключа.</p>
+
+      <h3>Что никогда не публикуется</h3>
+      <div class="note"><strong>Приватный ключ подписи никогда не публикуется.</strong> Он хранится только офлайн у владельца проекта и никогда не попадает в репозиторий, в ISO, в среду сборки или на GitHub. Публикуется только открытый ключ. Если кто-то предлагает вам «приватный ключ XrOS» — это подделка.</div>
+
+      <h3>Ручное восстановление</h3>
+      <p>Если обновление прервалось или база репозитория повреждена (например, после неудачного <code>pacman -Sy</code>), удалите повреждённую базу синхронизации и обновитесь заново:</p>
+      <div class="code-block">
+        <button class="copy-btn" type="button" data-copy="cmd-fix">Копировать</button>
+        <pre><code id="cmd-fix">sudo rm -f /var/lib/pacman/sync/xros.db*
+sudo pacman -Syu</code></pre>
+      </div>
+      <p>Если pacman жалуется на ключ, переустановите связку ключей вручную:</p>
+      <div class="code-block">
+        <button class="copy-btn" type="button" data-copy="cmd-keyring">Копировать</button>
+        <pre><code id="cmd-keyring">sudo pacman -S xros-keyring</code></pre>
+      </div>
+      <p class="muted small">Не отключайте проверку подписей (не ставьте SigLevel в TrustAll и подобные значения) — это лишает систему защиты от подмены пакетов.</p>
+    </section>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <div>
+      <strong>XrOS 1.0 Diamond</strong>
+      <p>Дистрибутив Linux на базе Arch Linux.<br>© <span id="year">2026</span> XrOS Project.</p>
+    </div>
+    <nav aria-label="Навигация в подвале">
+      <p class="foot-head">Разделы</p>
+      <ul>
+        <li><a href="download.html">Загрузка</a></li>
+        <li><a href="install.html">Установка</a></li>
+        <li><a href="security.html">Безопасность</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+      </ul>
+    </nav>
+    <nav aria-label="Ссылки проекта">
+      <p class="foot-head">Проект</p>
+      <ul>
+        <li><a href="https://github.com/Artemkrytoi111/XrOS" rel="noopener">GitHub — XrOS</a></li>
+        <li><a href="https://github.com/Artemkrytoi111/XrOS-Security-Updates" rel="noopener">GitHub — Security Updates</a></li>
+      </ul>
+    </nav>
+  </div>
+  <div class="container footer-bottom">XrOS — свободное программное обеспечение на базе Arch Linux.</div>
+</footer>
+<script src="assets/js/main.js"></script>
+</body>
+</html>

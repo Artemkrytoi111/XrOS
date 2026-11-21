@@ -1,0 +1,5 @@
+# XrOS — минимальный набор для bootstrap-тарбола (mkarchiso).
+# Полный список живой системы — в packages.x86_64.
+base
+linux
+mkinitcpio

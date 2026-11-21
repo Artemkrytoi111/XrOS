@@ -1,0 +1,231 @@
+/* XrOS website — Arch + EndeavourOS design
+   Light theme. Arch: #F6F9FC background, #1793D1 / #0088CC blue,
+   flat boxes #ECF2F5 / #BCD, no shadows.
+   EndeavourOS: lavender bands #E7E2F5, purple #7F3FBF, 8px radius,
+   large hero, flat cards #F2EFFA / #DDD8EE. No external dependencies. */
+:root {
+  --bg: #F6F9FC;
+  --bg-2: #ECF2F5;
+  --band: #E7E2F5;
+  --card: #FFFFFF;
+  --card-2: #F2EFFA;
+  --border: #BBCCDD;
+  --card-border: #DDD8EE;
+  --line: #888888;
+  --table-border: #BBBBBB;
+  --text: #222222;
+  --heading: #0D0A26;
+  --muted: #443D6B;
+  --accent: #1793D1;
+  --accent-dark: #0088CC;
+  --accent-2: #7F3FBF;
+  --accent-2-dark: #6A2FA6;
+  --code-bg: #FFFFDD;
+  --code-border: #E8E0A0;
+  --warn-bg: #FFF8E1;
+  --warn-border: #C9A227;
+  --warn-text: #7A5A00;
+  --header-bg: #333333;
+  --header-line: #0088CC;
+  --radius: 8px;
+  --max: 1150px;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  font-size: 17px;
+  line-height: 1.6;
+}
+::selection { background: var(--accent); color: #fff; }
+a { color: var(--accent-dark); text-decoration: none; }
+a:hover { text-decoration: underline; }
+a:focus-visible, button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+img, svg { max-width: 100%; }
+code, pre { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
+code { background: var(--code-bg); border: 1px solid var(--code-border); border-radius: 4px; padding: .1em .35em; font-size: .92em; }
+pre { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; overflow-x: auto; }
+pre code { background: none; border: 0; padding: 0; }
+
+.container { max-width: var(--max); margin: 0 auto; padding: 0 1.25rem; }
+
+/* Header — Arch dark bar with blue line, sticky like EndeavourOS */
+.site-header {
+  position: sticky; top: 0; z-index: 50;
+  background: var(--header-bg);
+  border-bottom: 4px solid var(--header-line);
+}
+.header-inner { display: flex; align-items: center; gap: 1rem; max-width: var(--max); margin: 0 auto; padding: .55rem 1.25rem; min-height: 64px; }
+.brand { display: flex; align-items: center; gap: .6rem; color: #fff; font-weight: 800; font-size: 1.35rem; letter-spacing: .04em; }
+.brand:hover { text-decoration: none; }
+.brand img { height: 36px; width: auto; display: block; filter: drop-shadow(0 0 5px rgba(139, 0, 255, .55)); }
+.brand small { color: #999; font-weight: 500; font-size: .8rem; }
+.main-nav { margin-left: auto; }
+.main-nav ul { display: flex; gap: .25rem; list-style: none; margin: 0; padding: 0; flex-wrap: wrap; }
+.main-nav a { color: #999; padding: .45rem .7rem; border-radius: 6px; font-size: .98rem; }
+.main-nav a:hover { color: #fff; text-decoration: underline; }
+.main-nav a.active { color: #fff; font-weight: 700; background: rgba(255, 255, 255, .16); }
+.nav-toggle {
+  display: none; margin-left: auto;
+  background: transparent; color: #fff;
+  border: 1px solid #555; border-radius: 8px;
+  padding: .5rem .75rem; font-size: 1.1rem; cursor: pointer;
+}
+
+/* Hero — EndeavourOS large hero on a lavender gradient */
+.hero {
+  padding: 6.5rem 0;
+  background: linear-gradient(180deg, #EAE0F6 0%, #F6F9FC 100%);
+  border-bottom: 1px solid var(--card-border);
+}
+.hero-inner { display: flex; align-items: center; gap: 3rem; }
+.hero-text { flex: 1; min-width: 0; }
+.hero-logo { flex: 0 0 auto; }
+.hero-logo img { width: 300px; height: auto; display: block; }
+.hero h1 { font-size: clamp(2.4rem, 6vw, 3.2rem); line-height: 1.1; letter-spacing: -.01em; color: var(--heading); margin: 0 0 .8rem; }
+.hero h1 .x { color: var(--accent-2); }
+.hero p.lead { font-size: 1.2rem; line-height: 1.5; color: var(--muted); max-width: 640px; }
+.badge {
+  display: inline-block; font-size: .85rem; font-weight: 700;
+  color: var(--accent-2); border: 1px solid var(--accent-2);
+  border-radius: 999px; padding: .25rem .8rem; margin-bottom: 1rem;
+  background: rgba(127, 63, 191, .08);
+}
+.badge.warn { color: var(--warn-text); border-color: var(--warn-border); background: var(--warn-bg); }
+
+.btn-row { display: flex; gap: .75rem; flex-wrap: wrap; margin-top: 1.6rem; }
+.btn {
+  display: inline-block; padding: .75rem 1.4rem; border-radius: var(--radius);
+  background: var(--accent); color: #fff; font-weight: 700; border: 1px solid var(--accent);
+}
+.btn:hover { background: var(--accent-dark); border-color: var(--accent-dark); text-decoration: none; }
+.btn.ghost { background: transparent; color: var(--text); border-color: var(--border); }
+.btn.ghost:hover { border-color: var(--accent); color: var(--accent-dark); }
+.btn.disabled { opacity: .55; cursor: not-allowed; }
+
+/* Sections — Arch headings with rule, EndeavourOS spacing */
+main { padding-bottom: 0; }
+section { padding: 3.5rem 0; }
+.band { background: var(--band); padding: 3.5rem 0; }
+.band section { padding: 0; }
+h2 { font-size: 1.8rem; line-height: 1.2; color: var(--heading); margin: 0 0 1rem; padding-bottom: .5rem; border-bottom: 1px solid var(--line); }
+h3 { font-size: 1.25rem; color: var(--heading); margin: 1.6rem 0 .5rem; }
+p { margin: .5rem 0 1rem; }
+.muted { color: var(--muted); }
+.small { font-size: .9rem; }
+
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.1rem; }
+.card {
+  background: var(--card); border: 1px solid var(--card-border);
+  border-radius: var(--radius); padding: 1.25rem;
+}
+.card h3 { margin-top: 0; }
+.card h3 a { color: var(--accent-2); }
+.card p { color: var(--muted); margin-bottom: 0; }
+.card .icon { font-size: 1.6rem; }
+
+.steps { counter-reset: step; list-style: none; padding: 0; }
+.steps li {
+  counter-increment: step;
+  background: var(--card); border: 1px solid var(--card-border);
+  border-radius: var(--radius); padding: 1.1rem 1.25rem 1.1rem 3.4rem;
+  margin-bottom: .8rem; position: relative;
+}
+.steps li::before {
+  content: counter(step);
+  position: absolute; left: 1rem; top: 1rem;
+  width: 1.9rem; height: 1.9rem; border-radius: 50%;
+  background: var(--accent); color: #fff; font-weight: 800;
+  display: flex; align-items: center; justify-content: center;
+}
+.steps li strong { display: block; margin-bottom: .2rem; }
+
+.table-wrap { overflow-x: auto; border: 1px solid var(--table-border); border-radius: var(--radius); background: var(--card); }
+table { width: 100%; border-collapse: collapse; min-width: 560px; background: var(--card); }
+th, td { text-align: left; padding: .6rem 1rem; vertical-align: top; }
+th { background: #EEEEEE; border: 1px solid var(--table-border); }
+td { border: 1px dotted var(--table-border); }
+tr:last-child td { border-bottom: 0; }
+td:first-child, th:first-child { border-left: 0; }
+td:last-child, th:last-child { border-right: 0; }
+
+.note {
+  background: var(--bg-2);
+  border: 1px solid var(--border); border-left: 4px solid var(--accent);
+  border-radius: var(--radius); padding: 1rem 1.2rem; margin: 1.2rem 0;
+}
+.note.warn { border-left-color: var(--warn-border); background: var(--warn-bg); }
+.note strong { color: var(--text); }
+
+.code-block { position: relative; }
+.copy-btn {
+  position: absolute; top: .6rem; right: .6rem;
+  background: var(--card); color: var(--text);
+  border: 1px solid var(--table-border); border-radius: 8px;
+  padding: .3rem .7rem; font-size: .85rem; cursor: pointer;
+}
+.copy-btn:hover { border-color: var(--accent); color: var(--accent-dark); }
+
+.faq-item { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1rem 1.25rem; margin-bottom: .8rem; }
+.faq-item h3 { margin: 0 0 .4rem; }
+.faq-item p { margin: 0; color: var(--muted); }
+.faq-item p a { color: var(--accent-dark); }
+
+.timeline { list-style: none; padding: 0; }
+.timeline li { border-left: 3px solid var(--accent); padding: 0 0 1.4rem 1.2rem; margin-left: .4rem; position: relative; }
+.timeline li::before {
+  content: ""; position: absolute; left: -.55rem; top: .3rem;
+  width: .9rem; height: .9rem; border-radius: 50%;
+  background: var(--accent-2);
+}
+.timeline time { color: var(--accent-2); font-weight: 700; font-size: .9rem; }
+
+/* Footer — EndeavourOS lavender, caps column headings */
+footer.site-footer { border-top: 1px solid #CFC6EA; background: #DCD4F0; padding: 2.5rem 0 2rem; color: var(--muted); font-size: .92rem; }
+.footer-inner { display: flex; gap: 2rem; flex-wrap: wrap; justify-content: space-between; }
+footer ul { list-style: none; padding: 0; margin: 0; }
+footer li { margin-bottom: .3rem; }
+footer a { color: var(--heading); }
+footer a:hover { color: var(--accent-dark); }
+.foot-head {
+  font-size: .8rem; font-weight: 700; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--muted); margin: 0 0 .6rem;
+}
+.footer-bottom { border-top: 1px solid var(--card-border); margin-top: 2rem; padding-top: 1.2rem; color: var(--muted); }
+
+/* Responsive */
+@media (max-width: 900px) {
+  .cards { grid-template-columns: repeat(2, 1fr); }
+  .nav-toggle { display: block; }
+  .main-nav {
+    display: none; position: absolute; top: 100%; left: 0; right: 0;
+    background: var(--header-bg); border-bottom: 4px solid var(--header-line);
+    padding: .5rem 1.25rem 1rem;
+  }
+  .main-nav.open { display: block; }
+  .main-nav ul { flex-direction: column; gap: .1rem; }
+  .main-nav a { display: block; padding: .6rem .7rem; }
+  .site-header { position: relative; }
+  .header-inner { flex-wrap: wrap; }
+  .hero { padding: 4rem 0; }
+  .hero-inner { flex-direction: column; gap: 1.5rem; text-align: center; }
+  .hero-logo img { width: 200px; height: auto; }
+  .hero p.lead { margin-left: auto; margin-right: auto; }
+  .btn-row { justify-content: center; }
+}
+@media (max-width: 600px) {
+  body { font-size: 16px; }
+  .cards { grid-template-columns: 1fr; }
+  .hero { padding: 3rem 0 2.5rem; }
+  .btn-row .btn { width: 100%; text-align: center; }
+  .steps li { padding-left: 3rem; }
+  .brand small { display: none; }
+}

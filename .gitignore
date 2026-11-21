@@ -44,3 +44,19 @@ website/
 
 # Rust build artifacts (cargo check/build)
 src/*/target/
+
+# Готовые пакеты и их подписи — пересобираются makepkg из PKGBUILD
+*.pkg.tar.zst
+*.pkg.tar.zst.sig
+*.pkg.tar.xz
+# Скомпилированный бинарь GUI — собирается `cargo build --release`
+packages/xros-installer/xros-install-gui
+profile/airootfs/usr/local/bin/xros-install-gui
+
+# Подписанный [xros]-репозиторий — артефакт сборки (makepkg + repo-add
+# + подпись). Пересоздаётся scripts/sign-repo-offline.sh. В git не нужен.
+repo/
+profile/airootfs/usr/share/xros/repo/
+# Тестовые GPG-ключи и репозиторий для ручных проверок — вне git
+# (AGENTS.md: не трогать GPG-ключи).
+xros-gpg-test/

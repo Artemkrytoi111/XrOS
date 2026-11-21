@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# xros-gpg-check — проверка публичного ключа XrOS по ожидаемому отпечатку.
+#
+# Использование: xros-gpg-check <файл-ключа> <ожидаемый-отпечаток>
+# Проверяет:
+#   * файл — валидный PGP-публичный ключ (gpg --show-keys его читает),
+#     и в файле ровно один ключ;
+#   * отпечаток ключа равен ожидаемому (40 hex, без учёта регистра/пробелов);
+#   * validity ключа допустима (R-13, R-16) — см. validity_acceptable();
+#   * ключ не просрочен (поле expires, если задано, — в будущем;
+#     нечисловое expires — некорректная строка pub, отказ);
+#   * у ключа есть способность подписывать (caps содержат 's') и нет
+#     флага disabled ('D' в caps — именно так disabled виден
+#     в --with-colons; см. ниже).
+# Выход 0 — всё сошлось; иначе ненулевой код и причина в stderr.
+# Используется в build.sh (до копирования ключа), customize_airootfs.sh
+# (в живой системе) и движке (в установленной системе) — одна логика
+# проверки везде. Приватные ключи здесь не обрабатываются.
+#
+# --- Политика validity (R-16, GnuPG doc/DETAILS, поле 2 строки pub) ---
+# ВАЖНО: validity здесь — фильтр дефектов, а НЕ источник доверия.
+# Доверие даёт только сверка отпечатка с ожидаемым (владелец
+# подтверждает FPR вне канала). Поэтому принимаются все значения,
+# означающие «дефектов нет», независимо от уровня доверия в локальном
+# keyring. Значения по DETAILS (проверено с GnuPG 2.4.4, см. ниже):
+#   '-' — unknown validity. НОРМА для --show-keys на файле ключа
+#          в чужом/пустом keyring: gpg не может вычислить validity
+#          без trustdb. Дефектов нет. ПРИНИМАЕТСЯ.
+#   'o' — unknown, ключ новый для системы. Дефектов нет, информации
+#          о доверии нет. ПРИНИМАЕТСЯ (отдельно от '-': 'o' означает
+#          именно «новый», '-' — «вычислить не удалось»).
+#   'q' — undefined validity: trustdb вердикта не вынес, дефектов
+#          нет. ПРИНИМАЕТСЯ (отдельно от '-' и 'o').
+#   'm' — marginal validity: ключ заверен marginal-интродьюсерами.
+#          Структурно валиден, не отозван, не просрочен. ПРИНИМАЕТСЯ.
+#   'f' — full validity: заверен доверенным интродьюсером. ПРИНИМАЕТСЯ.
+#   'u' — ULTIMATE validity (НЕ unknown, как ошибочно утверждалось
+#          в R-13!). Собственный/безусловно доверенный ключ. ПРИНИМАЕТСЯ.
+# Отклоняются:
+#   'n' — not valid: gpg определил ключ как недействительный (R-13
+#          ошибочно допускал 'n' — ИСПРАВЛЕНО в R-16);
+#   'i' — invalid (например, повреждена самоподпись);
+#   'd' — disabled; 'r' — revoked; 'e' — expired;
+#   пустое значение и любое другое значение — fail closed.
+# Эмпирика (GnuPG 2.4.4, тесты в test-gpg-handling.sh):
+#   '-' — --show-keys на файле в свежем GNUPGHOME (реальный контекст
+#          проверки в build.sh/customize/движке);
+#   'u' — собственный ключ в своём keyring;
+#   'f' — ключ, подписанный ultimately-trusted интродьюсером;
+#   'm' — ключ, подписанный двумя marginal-интродьюсерами (default opts);
+#   'r' — отозванный ключ (в любом keyring);
+#   'e' — просроченный ключ; 'i' — повреждённый ключ (переворот байта
+#          в самоподписи, gpg --show-keys его читает, validity 'i').
+#   'n', 'o', 'q' — с GnuPG 2.4.4 в этой среде НЕ воспроизведены
+#          реальным gpg (ownertrust never даёт '-', а не 'n'; 'o'/'q'
+#          не появились ни в одном сценарии); ветви реализованы
+#          и покрыты unit-тестами парсера (см. test-gpg-handling.sh,
+#          секция A2) — это тесты таблицы политики, а не поведения gpg.
+#   'd' — через --show-keys на файле НЕ наблюдается вообще: disabled —
+#          локальное состояние keyring, в экспортированный файл не
+#          попадает (файл отключённого ключа выглядит как хороший:
+#          validity '-', caps 'scSC'). В keyring, где ключ отключён,
+#          validity остаётся 'u', а в поле 12 (caps) появляется 'D'
+#          ('scSCD') — поэтому дополнительно отклоняется caps с 'D'.
+# Поля строки pub (--with-colons, GnuPG 2.4.4): 2 — validity,
+# 6 — created, 7 — expires (пусто = бессрочный), 9 — ownertrust,
+# 12 — capabilities. Строка pub обязана иметь >=12 полей.
+set -euo pipefail
+
+# validity_acceptable <значение> — 0, если значение допустимо.
+# Явный allowlist: всё неизвестное отклоняется (fail closed).
+validity_acceptable() {
+  case "${1:-}" in
+    -|o|q|m|f|u) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# caps_acceptable <caps> — 0, если способность подписывать есть
+# и нет флага disabled ('D' в caps).
+caps_acceptable() {
+  case "${1:-}" in
+    *D*) return 1 ;;
+    *[Ss]*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# expires_ok <expires> — 0, если срок в будущем или пуст (бессрочный);
+# 1 — если просрочен или значение нечисловое (некорректная строка pub).
+expires_ok() {
+  local exp="${1:-}" now
+  [[ -z "$exp" ]] && return 0
+  [[ "$exp" =~ ^[0-9]+$ ]] || return 1
+  now="$(date +%s)"
+  [[ "$exp" -gt "$now" ]]
+}
+
+# parse_pub_line <строка pub> — проверяет структуру (>=12 полей)
+# и извлекает VALIDITY/EXPIRES/CAPS в переменные. Возврат 0 — строка
+# корректна, 1 — неполная/некорректная (fail closed, не принимать).
+parse_pub_line() {
+  local line="$1" n
+  n="$(printf '%s' "$line" | awk -F: '{print NF}')"
+  [[ "$n" -ge 12 ]] || return 1
+  VALIDITY="$(printf '%s' "$line" | cut -d: -f2)"
+  EXPIRES="$(printf '%s' "$line" | cut -d: -f7)"
+  CAPS="$(printf '%s' "$line" | cut -d: -f12)"
+  return 0
+}
+
+main() {
+  local KEY_FILE="${1:-}" EXPECTED="${2:-}"
+  local COLONS PUB_COUNT FPR PUB VALIDITY EXPIRES CAPS
+  [[ -n "$KEY_FILE" && -n "$EXPECTED" ]] || { echo "xros-gpg-check: использование: $0 <файл-ключа> <отпечаток>" >&2; return 2; }
+  [[ -f "$KEY_FILE" ]] || { echo "xros-gpg-check: нет файла ключа: $KEY_FILE" >&2; return 1; }
+  EXPECTED="$(printf '%s' "$EXPECTED" | tr -d '[:space:]' | tr 'a-f' 'A-F')"
+  [[ "$EXPECTED" =~ ^[0-9A-F]{40}$ ]] || { echo "xros-gpg-check: неверный формат ожидаемого отпечатка: $EXPECTED (нужно 40 hex-символов)" >&2; return 1; }
+  command -v gpg >/dev/null 2>&1 || { echo "xros-gpg-check: нет gpg на хосте" >&2; return 1; }
+
+  COLONS="$(gpg --batch --show-keys --with-colons "$KEY_FILE" 2>/dev/null)" \
+    || { echo "xros-gpg-check: не удалось прочитать PGP-ключ из $KEY_FILE" >&2; return 1; }
+  PUB_COUNT="$(printf '%s' "$COLONS" | awk -F: '$1=="pub" {n++} END {print n+0}')"
+  [[ "$PUB_COUNT" -eq 1 ]] || { echo "xros-gpg-check: в файле $PUB_COUNT ключей, ожидался ровно один" >&2; return 1; }
+  FPR="$(printf '%s' "$COLONS" | awk -F: '$1=="fpr" {print $10; exit}')"
+  [[ -n "$FPR" ]] || { echo "xros-gpg-check: в файле нет отпечатка (не PGP-ключ?)" >&2; return 1; }
+  FPR="$(printf '%s' "$FPR" | tr -d '[:space:]' | tr 'a-f' 'A-F')"
+  [[ "$FPR" == "$EXPECTED" ]] || { echo "xros-gpg-check: отпечаток не совпадает: в файле $FPR, ожидалось $EXPECTED" >&2; return 1; }
+
+  # --with-colons, строка pub: поле 2 — validity, поле 7 — expires
+  # (unix ts или пусто), поле 12 — capabilities.
+  PUB="$(printf '%s' "$COLONS" | awk -F: '$1=="pub" {print; exit}')"
+  parse_pub_line "$PUB" || { echo "xros-gpg-check: неполная или некорректная строка pub" >&2; return 1; }
+  if ! validity_acceptable "$VALIDITY"; then
+    echo "xros-gpg-check: недопустимая validity '${VALIDITY:-<пусто>}'" >&2
+    return 1
+  fi
+  if ! expires_ok "$EXPIRES"; then
+    echo "xros-gpg-check: ключ просрочен или некорректное поле expires: '${EXPIRES:-<пусто>}'" >&2
+    return 1
+  fi
+  if ! caps_acceptable "$CAPS"; then
+    echo "xros-gpg-check: ключ не подходит (caps: ${CAPS:-<пусто>}; нужна способность подписывать, без 'D')" >&2
+    return 1
+  fi
+  echo "xros-gpg-check: OK: $FPR (sign, не отозван, не просрочен)"
+  return 0
+}
+
+# При source'е (тесты) main не запускается: можно вызывать
+# validity_acceptable/caps_acceptable напрямую.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
