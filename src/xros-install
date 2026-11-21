@@ -255,7 +255,11 @@ fi
 # только глушим сторожа.
 xros_on_exit() {
   local rc=$?
-  [[ -n "${XROS_WATCHDOG_PID:-}" ]] && kill "$XROS_WATCHDOG_PID" 2>/dev/null || true
+  # kill с пустым PID не должен принимать текущую группу за цель:
+  # side-effects от `&&`/`||` тут важнее читаемости.
+  if [[ -n "${XROS_WATCHDOG_PID:-}" ]]; then
+    kill "$XROS_WATCHDOG_PID" 2>/dev/null || true
+  fi
   if [[ $rc -ne 0 && "${XROS_INSTALLING:-0}" == "1" && "$XROS_CLEANUP_DONE" != "1" ]]; then
     XROS_STOP_REASON="ошибка установки (код $rc)"
     xros_cleanup
