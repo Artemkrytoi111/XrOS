@@ -1,0 +1,35 @@
+# XrOS: шелл-скрипты, systemd-юниты и конфиги ОБЯЗАНЫ оставаться с LF.
+# Windows-клиент с core.autocrlf=true иначе превратит shebang в "#!/usr/bin/env bash\r"
+# и получит "bash\r: No such file or directory" в живом образе.
+* text=auto
+*.sh        text eol=lf
+*.bash      text eol=lf
+*.py        text eol=lf
+*.install   text eol=lf
+PKGBUILD    text eol=lf
+*.service   text eol=lf
+*.timer     text eol=lf
+*.desktop   text eol=lf
+*.conf      text eol=lf
+*.hook      text eol=lf
+profiledef.sh text eol=lf
+
+# Байнарные артефакты пакетов и ключи — как есть.
+*.pkg.tar.zst binary
+*.pkg.tar.xz binary
+*.sig         binary
+*.gpg         binary
+*.key         binary
+
+# Скрипты, которые лежат в профиле/пакетах без расширения, у них их
+# собственные shebang: сохраняем LF, чтобы они исполнялись.
+profile/airootfs/usr/local/bin/* text eol=lf
+packages/xros-installer/xros-install text eol=lf
+packages/xros-cli/xros text eol=lf
+packages/xros-welcome/xros-welcome text eol=lf
+packages/xros-welcome/xros-welcome-gui text eol=lf
+src/xros-install text eol=lf
+src/xros-welcome text eol=lf
+src/xros-welcome-gui text eol=lf
+src/xros-installer-diamond/xros-installer-diamond text eol=lf
+profile/airootfs/usr/local/lib/xros-installer-diamond/xros-installer-diamond text eol=lf
