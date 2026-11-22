@@ -17,7 +17,7 @@ bad()  { echo "FAIL  $1"; FAIL=$((FAIL+1)); FAILED+=("$1"); }
 skip() { echo "SKIP  $1 ($2)"; SKIP=$((SKIP+1)); }
 nc()   { echo "NOT CONFIGURED  $1"; NCFG=$((NCFG+1)); }
 
-cd "$ROOT"
+cd "$ROOT" || { echo "xros-diagnose: не удалось перейти в $ROOT" >&2; exit 1; }
 
 # ---------------------------------------------------------------- 1. bash -n
 while IFS= read -r -d '' f; do
@@ -779,6 +779,8 @@ fi
 # расхождение означает, что пакет в repo/ устарел и нужна
 # пересборка (makepkg + repo-add).
 for p in xros-cli xros-installer xros-welcome xros-branding; do
+  # SC2154: source[] определяется только после source ./PKGBUILD в subshell.
+  # shellcheck disable=SC2154
   if (cd "packages/$p" && source ./PKGBUILD >/dev/null 2>&1 && for s in "${source[@]}"; do [[ -f "$s" ]] || exit 1; done); then
     ok "PKGBUILD $p: все source-файлы на месте"
   else

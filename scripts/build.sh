@@ -567,9 +567,21 @@ MK_LOG="$OUT/mkarchiso.log"
 "$BUILD_ENV" --exec -- mkarchiso -v -w /xros/work -o /xros/out /xros/profile >"$MK_LOG" 2>&1 \
     || { tail -30 "$MK_LOG" >&2; die "mkarchiso не удался (лог: $MK_LOG). Если падение — на pacstrap полного списка (Write failed + EPERM), СТОП: разобрать причину, ручной pacstrap и маркеры base.* — только с явного разрешения, см. шапку файла."; }
 echo "mkarchiso завершён (лог: $MK_LOG)"
-ISO="$(ls "$OUT"/xros-*.iso 2>/dev/null | grep -v -e '-hybrid\.iso$' | head -1)"
+ISO=""
+for f in "$OUT"/xros-*.iso; do
+  [[ -e "$f" ]] || continue
+  [[ "$f" == *-hybrid.iso$ ]] && continue
+  ISO="$f"
+  break
+done
 [[ -n "$ISO" ]] || die "mkarchiso не создал ISO в $OUT"
-[[ "$(ls "$OUT"/xros-*.iso 2>/dev/null | grep -v -e '-hybrid\.iso$' | wc -l)" -eq 1 ]] \
+count=0
+for f in "$OUT"/xros-*.iso; do
+  [[ -e "$f" ]] || continue
+  [[ "$f" == *-hybrid.iso$ ]] && continue
+  count=$((count+1))
+done
+[[ "$count" -eq 1 ]] \
     || die "в $OUT больше одного ISO от mkarchiso — непонятно, какой обрабатывать"
 echo "ISO от mkarchiso: $ISO ($(stat -c%s "$ISO") Б)"
 
