@@ -1008,12 +1008,10 @@ if [[ -n "$NONINTERACTIVE" ]]; then
   # Имя компьютера — только безопасные символы: иначе перевод строки
   # или пробелы из GUI сломали бы /etc/hostname и /etc/hosts.
   HOSTNAME=$(printf '%s' "$HOSTNAME" | tr -cd 'a-zA-Z0-9.-')
-  # RFC 1123: label не начинается/не заканчивается точкой или дефисом,
-  # нет двойных точек. Не прошло — заменяем на безопасное значение.
-  if [[ "$HOSTNAME" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]] \
-     && [[ "$HOSTNAME" != *..* && "$HOSTNAME" != *.-* && "$HOSTNAME" != *-. ]]; then
-    :
-  else
+  # RFC 1123: без точек/дефисов по краям и без двойных точек.
+  # Не прошло — заменяем на безопасное значение.
+  if ! [[ "$HOSTNAME" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]] \
+     || [[ "$HOSTNAME" == *..* || "$HOSTNAME" == *.-* || "$HOSTNAME" == *-. ]]; then
     HOSTNAME="xros-os"
   fi
   FULLNAME=$(printf '%s' "${FULLNAME:-}" | tr -d '\r\n')
