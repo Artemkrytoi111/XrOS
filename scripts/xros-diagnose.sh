@@ -17,7 +17,7 @@ bad()  { echo "FAIL  $1"; FAIL=$((FAIL+1)); FAILED+=("$1"); }
 skip() { echo "SKIP  $1 ($2)"; SKIP=$((SKIP+1)); }
 nc()   { echo "NOT CONFIGURED  $1"; NCFG=$((NCFG+1)); }
 
-cd "$ROOT"
+cd "$ROOT" || { echo "xros-diagnose: не удалось перейти в $ROOT" >&2; exit 1; }
 
 # ---------------------------------------------------------------- 1. bash -n
 while IFS= read -r -d '' f; do
@@ -403,27 +403,24 @@ else
   bad "xros-install-gui: нет request_focus в app.rs"
 fi
 # 2) Свежесть и соответствие поставляемого бинаря исходникам:
-#    бинарь новее app.rs и system.rs И содержит маркер фильтрации
-#    RAID (linux_raid_member) — это доказывает, что в нём есть
-#    исправление A-38, а не только свежий mtime. При устаревшем
-#    бинаре — прямое указание на пересборку GUI.
-#    R-20 FINAL F2 (13.11.2026): полная строка 'linux_raid_member' в
-#    бинаре НЕ хранится — LLVM разрезает литералы; проверяется
-#    фрагмент 'linux_raid_membe', который присутствует в официальном
-#    бинаре 1.1 (cf3cdd2e…), плюс 14 RAID-фрагментов и 7/7 unit-тестов.
-if [[ packages/xros-installer/xros-install-gui -nt src/xros-install-gui-rs/src/app.rs ]] \
-   && [[ packages/xros-installer/xros-install-gui -nt src/xros-install-gui-rs/src/system.rs ]]; then
+# 2) Сверка SHA256 исходников с записанным при сборке (xros-build-env.sh).
+#    Фрагмент 'linux_raid_membe' — не полная строка: LLVM разрезает литералы.
+_gui_src_sha="$(cd src/xros-install-gui-rs 2>/dev/null && sha256sum Cargo.toml Cargo.lock src/*.rs 2>/dev/null | sort -k2 | sha256sum | cut -d' ' -f1)"
+_gui_recorded_sha="$(head -1 packages/xros-installer/xros-install-gui.sha256 2>/dev/null)"
+if [[ -n "$_gui_src_sha" && "$_gui_src_sha" == "$_gui_recorded_sha" ]]; then
   if command -v strings >/dev/null 2>&1; then
     if strings packages/xros-installer/xros-install-gui | grep -q 'linux_raid_membe'; then
-      ok "xros-install-gui: бинарь свежее исходников и содержит фильтрацию RAID (A-38)"
+      ok "xros-install-gui: SHA256 источников совпадает с записанным при сборке, содержит фильтрацию RAID (A-38)"
     else
-      bad "xros-install-gui: бинарь свежее исходников, но БЕЗ фильтрации RAID (A-38) — требуется пересборка GUI (cargo build --release)"
+      bad "xros-install-gui: SHA256 совпадает, но БЕЗ фильтрации RAID (A-38) — требуется пересборка GUI (cargo build --release)"
     fi
   else
-    ok "xros-install-gui: бинарь свежее исходников (проверка содержимого пропущена: нет strings)"
+    ok "xros-install-gui: SHA256 источников совпадает с записанным при сборке (проверка содержимого пропущена: нет strings)"
   fi
+elif [[ -z "$_gui_recorded_sha" ]]; then
+  bad "xros-install-gui: нет .sha256-файла при бинаре — требуется пересборка GUI (cargo build --release)"
 else
-  bad "xros-install-gui: бинарь старше исходников — требуется пересборка GUI (cargo build --release)"
+  bad "xros-install-gui: SHA256 источников не совпадает с записанным при сборке — требуется пересборка GUI (cargo build --release)"
 fi
 # fixed7 (11.11.2026): надёжное ожидание ActivityManager перед
 # запуском plasmashell — After= для Type=simple гарантирует только
@@ -779,6 +776,8 @@ fi
 # расхождение означает, что пакет в repo/ устарел и нужна
 # пересборка (makepkg + repo-add).
 for p in xros-cli xros-installer xros-welcome xros-branding; do
+  # SC2154: source[] определяется только после source ./PKGBUILD в subshell.
+  # shellcheck disable=SC2154
   if (cd "packages/$p" && source ./PKGBUILD >/dev/null 2>&1 && for s in "${source[@]}"; do [[ -f "$s" ]] || exit 1; done); then
     ok "PKGBUILD $p: все source-файлы на месте"
   else

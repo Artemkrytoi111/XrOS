@@ -60,7 +60,7 @@ rm -rf /etc/systemd/system/getty@tty1.service.d
 # Живой пользователь xros.
 useradd -m -G wheel,audio,video,optical,storage,render -s /bin/bash xros
 passwd -l xros || true
-echo "xros ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/live-xros
+echo "xros ALL=(root) NOPASSWD: /usr/local/bin/xros-install" > /etc/sudoers.d/live-xros
 chmod 440 /etc/sudoers.d/live-xros
 
 # Обои и тёмная тема KDE для живого пользователя.
@@ -133,8 +133,7 @@ chown -R xros:xros /home/xros
 # системы — в установленной системе приветствие не автозапускается.
 
 # --- os-release XrOS ---
-# PLACEHOLDER: URL https://xros.example/ — домен не существует,
-# заменить на настоящий при публикации (см. AUDIT-REPORT.md).
+# URL не публикуем: домена проекта пока нет.
 cat > /usr/lib/os-release <<'OS_EOF'
 NAME="XrOS"
 PRETTY_NAME="XrOS 1.0"
@@ -144,10 +143,6 @@ BUILD_ID=1.0
 VERSION="1.0"
 VERSION_ID="1.0"
 ANSI_COLOR="38;2;139;0;255"
-HOME_URL="https://xros.example/"
-DOCUMENTATION_URL="https://xros.example/"
-SUPPORT_URL="https://xros.example/"
-BUG_REPORT_URL="https://xros.example/"
 LOGO=xros
 IMAGE_ID=xros
 IMAGE_VERSION=1.0

@@ -1,21 +1,62 @@
 // Диски и разделы — просто обёртки над lsblk и findmnt.
 // Показываем только настоящие диски, а тот, с которого загружен ISO, прячем.
 
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+// Блокирующее устройство может не отвечать (умирающий диск, USB без
+// питания, зависший RAID): без таймаута Command::output() держал бы
+// UI-поток бесконечно. stderr уводится в файл, чтобы EOF на stdout
+// не зависел от внуков, унаследовавших дескриптор.
+const CMD_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn run_timeout(args: &[&str]) -> Option<std::process::Output> {
+    use std::io::Read;
+    let tmp = std::env::temp_dir().join(format!("xros-gui-cmd-{}.err", std::process::id()));
+    let err_file = std::fs::File::create(&tmp).ok()?;
+    let mut child = Command::new(args[0])
+        .args(&args[1..])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(err_file))
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + CMD_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break st,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&tmp);
+                return None;
+            }
+        }
+    };
+    let mut out = Vec::new();
+    if let Some(mut so) = child.stdout.take() {
+        let _ = so.read_to_end(&mut out);
+    }
+    let err = std::fs::read(&tmp).unwrap_or_default();
+    let _ = std::fs::remove_file(&tmp);
+    Some(std::process::Output { status, stdout: out, stderr: err })
+}
 
 fn run(args: &[&str]) -> String {
-    Command::new(args[0])
-        .args(&args[1..])
-        .output()
+    run_timeout(args)
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default()
 }
 
-// R-03: то же, но с кодом возврата: None — команда не запустилась
-// или завершилась ненулевым кодом. Используется там, где ошибка
-// проверки не должна молча превращать устройство в «свободное».
+// R-03: то же, но с кодом возврата: None — команда не запустилась,
+// завершилась ненулевым кодом или не уложилась в таймаут. Используется
+// там, где ошибка проверки не должна молча превращать устройство
+// в «свободное».
 fn run_status(args: &[&str]) -> Option<String> {
-    let out = Command::new(args[0]).args(&args[1..]).output().ok()?;
+    let out = run_timeout(args)?;
     if out.status.success() {
         Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
@@ -164,10 +205,8 @@ fn blkid_type(dev: &str) -> Result<Option<String>, String> {
             "устройство {dev} не читается (нет узла, исчезло, нет прав или ошибка ввода-вывода) — проверка невозможна (R-18)"
         ));
     }
-    let output = Command::new("blkid")
-        .args(["-p", "-s", "TYPE", "-o", "value", dev])
-        .output()
-        .map_err(|e| format!("blkid не запустился для {dev}: {e}"))?;
+    let output = run_timeout(&["blkid", "-p", "-s", "TYPE", "-o", "value", dev])
+        .ok_or_else(|| format!("blkid не запустился или не ответил за {} с для {dev}", CMD_TIMEOUT.as_secs()))?;
     if output.status.success() {
         let t = String::from_utf8_lossy(&output.stdout).trim().to_string();
         return Ok(if t.is_empty() { None } else { Some(t) });

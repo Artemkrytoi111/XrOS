@@ -130,6 +130,20 @@ pub fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+// Валидация одного значения конфига: движок (src/xros-install) конфиг
+// ИСПОЛНЯЕТ (set -a; . "$CONF"), поэтому перевод строки в значении —
+// это лишняя строка/команда, выполняемая от root. Пустые значения
+// допустимы (режим erase не передаёт ROOT_PART/EFI_PART).
+pub fn validate_conf_value(key: &str, value: &str) -> std::io::Result<()> {
+    if value.contains('\n') || value.contains('\r') {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid value for {}: contains newline", key),
+        ));
+    }
+    Ok(())
+}
+
 pub fn write_conf(sel: &Choices) -> std::io::Result<()> {
     let rootpass = if sel.same_admin_pass {
         sel.userpass.clone()
@@ -157,6 +171,14 @@ pub fn write_conf(sel: &Choices) -> std::io::Result<()> {
         ("DE", sel.de.clone()),
         ("OFFICE", sel.office.clone()),
     ];
+    // Валидация значений ДО создания файла конфига:
+    // движок (src/xros-install) конфиг ИСПОЛНЯЕТ (set -a; . "$CONF"),
+    // поэтому перевод строки в значении — это лишняя строка/команда,
+    // выполняемая от root. Пустые значения допустимы (режим erase
+    // не передаёт ROOT_PART/EFI_PART).
+    for (k, v) in &vals {
+        validate_conf_value(k, v)?;
+    }
     // 600 — с момента создания: File::create дал бы 644 на время записи,
     // а в конфиге — оба пароля. OpenOptionsExt::mode действует только
     // при создании, поэтому set_permissions оставляем для уже
@@ -168,20 +190,20 @@ pub fn write_conf(sel: &Choices) -> std::io::Result<()> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let mut f = std::fs::OpenOptions::new()
         .write(true)
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .mode(0o600)
         .open(CONF)?;
     for (k, v) in vals {
         writeln!(f, "{k}={}", shell_quote(&v))?;
     }
     drop(f);
+    // Файл уже создан с mode=0o600, но на всякий случай убеждаемся
     std::fs::set_permissions(CONF, std::fs::Permissions::from_mode(0o600))?;
     Ok(())
 }
 
 pub fn start_install(
-    sel: &Choices,
+    sel: &mut Choices,
 ) -> std::io::Result<(mpsc::Receiver<InstallEvent>, InstallHandle)> {
     write_conf(sel)?;
     let parent_pid = std::process::id() as libc::pid_t;
@@ -313,6 +335,9 @@ pub fn start_install(
             let _ = tx.send(InstallEvent::Finished(ok));
         }
     });
+    // Движок запущен, конфиг прочитан: затираем копии. При отказе spawn
+    // пароли остаются в структуре — пользователь может повторить попытку.
+    sel.clear_secrets();
     Ok((rx, handle))
 }
 
@@ -323,4 +348,48 @@ pub fn log_tail(n: usize) -> String {
     };
     let lines: Vec<&str> = text.lines().rev().take(n).collect();
     lines.into_iter().rev().collect::<Vec<_>>().join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_rejects_newline_and_cr() {
+        for bad in ["a\nb", "a\rb", "DISK=/dev/sda\nDISK2=/dev/sdb", "x\n# comment"] {
+            assert!(
+                validate_conf_value("TEST", bad).is_err(),
+                "{bad:?} должно отклоняться (инъекция строки)"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_accepts_normal_values() {
+        for ok in ["/dev/sda", "ext4", "my-host", "pass with spaces", "pass'with'quotes", ""] {
+            assert!(
+                validate_conf_value("TEST", ok).is_ok(),
+                "{ok:?} должно приниматься"
+            );
+        }
+    }
+
+    #[test]
+    fn shell_quote_stays_one_word() {
+        // Значения, опасные для shell, после экранирования не несут
+        // ни одной ОТКРЫТОЙ одинарной кавычки (каждая заэкранирована
+        // как '\'). Это гарантия, что строка конфига — одно слово.
+        for v in ["", "abc", "a'b", "'", "''", "$(reboot)", "`reboot`", "a b c", "ru ru"] {
+            let q = shell_quote(v);
+            let inner = &q[1..q.len() - 1];
+            let mut chars = inner.chars();
+            while let Some(c) = chars.next() {
+                if c == '\'' {
+                    assert!(matches!(chars.next(), Some('\\')),
+                        "открытая кавычка в {v:?}: {q}");
+                }
+            }
+            assert_eq!(q.chars().count(), 2 + inner.chars().count());
+        }
+    }
 }

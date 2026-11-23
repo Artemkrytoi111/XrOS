@@ -8,15 +8,12 @@
 # Кандидат Фазы 5 (ротация production-ключа): подписывается старым
 # production-ключом на переходный период. В пакете — ТОЛЬКО публичный
 # ключ; приватных ключей, паролей и сертификатов отзыва нет.
-# PLACEHOLDER: https://xros.example — домена не существует,
-# настоящий домен/сайт XrOS ещё не выбран (см. ARCHITECTURE.md).
 
 pkgname=xros-keyring
 pkgver=1.0
 pkgrel=1
 pkgdesc="Переходный пакет ключей XrOS: новый production GPG-ключ"
 arch=('any')
-url="https://xros.example"
 license=('custom:XrOS')
 # Зависимость от pacman намеренно НЕ указана: pacman-key и gpg, используемые
 # в post_install, входят в пакет pacman, а сам pacman — это пакетный

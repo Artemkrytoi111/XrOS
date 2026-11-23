@@ -171,11 +171,20 @@ acquire_lock() {
 MOUNTS_FILE="$BUILD_ENV/.mounts"
 cleanup() {
   if [[ -f "$MOUNTS_FILE" ]]; then
-    # Снимать в обратном порядке создания.
-    tac "$MOUNTS_FILE" 2>/dev/null | while read -r mp; do
-      [[ -n "$mp" ]] && umount "$mp" 2>/dev/null || true
-    done
-    rm -f "$MOUNTS_FILE"
+    # Снимать в обратном порядке создания. Ошибка обычного umount —
+    # не повод оставить точки смонтированными: пробуем лениво (umount -l),
+    # а если и это не вышло — НЕ удаляем $MOUNTS_FILE: следующая сборка
+    # должна увидеть, что осталось, а не молча считать, что всё чисто.
+    local mp left=0
+    while read -r mp; do
+      [[ -n "$mp" ]] || continue
+      umount "$mp" 2>/dev/null && continue
+      warn "umount $mp не удался — пробую umount -l"
+      umount -l "$mp" 2>/dev/null && continue
+      warn "не удалось размонтировать $mp — точка остаётся смонтированной ($MOUNTS_FILE сохранён)"
+      left=1
+    done < <(tac "$MOUNTS_FILE" 2>/dev/null)
+    [[ "$left" -eq 0 ]] && rm -f "$MOUNTS_FILE"
   fi
   # .inner.*.sh — временные скрипты chroot-пути; у каждого вызова свой
   # файл (mktemp), иначе параллельные вызовы (tar-поток в copy_to_builder)
@@ -303,6 +312,14 @@ ensure_zstd() {
   fi
 }
 
+# Отпечаток ключа, которым Arch подписывает bootstrap-тарбол
+# (release-инжиниринг, Pierre Schmitz <pierre@archlinux.org>, ключ
+# 0x76A5EF9054449A5C). Закреплён по состоянию на 2026-11-21: проверено
+# gpg --list-packets на archlinux-bootstrap-x86_64.tar.zst.sig с
+# geo.mirror.pkgbuild.com. В отличие от «ключа из подписи», этот
+# отпечаток нельзя подменить через MITM keyserver'а.
+ARCH_BOOTSTRAP_KEY_FPR="3E80CA1A8B89F69CBA57D98A76A5EF9054449A5C"
+
 download_bootstrap() {
   mkdir -p "$BUILD_ENV" "$LOG_DIR"
   if [[ -s "$BOOTSTRAP_FILE" ]]; then
@@ -317,38 +334,30 @@ download_bootstrap() {
   curl -fL -s -o "$BOOTSTRAP_SIG" "$BOOTSTRAP_SIG_URL" \
     || die "не удалось скачать подпись .sig ($BOOTSTRAP_SIG_URL) — без проверенной подписи bootstrap не используется (A-08)"
   if [[ -s "$BOOTSTRAP_SIG" ]]; then
-    log "проверяю подпись GPG (ключ Arch берётся с keyserver.ubuntu.com)..."
-    if ! gpg --keyserver keyserver.ubuntu.com --keyserver-options auto-key-retrieve \
-        --verify "$BOOTSTRAP_SIG" "$BOOTSTRAP_FILE" 2>/tmp/xros-gpg-verify.log; then
-      # Запасной путь (2026-11-10, проверено на хосте): dirmngr НЕ ходит
-      # через egress-прокси хоста — ни hkp:// (порт 11371), ни hkps://
-      # (keyserver receive failed). А curl через тот же прокси работает.
-      # Поэтому тянем ключ по HTTPS с keyserver.ubuntu.com/pks/lookup
-      # и импортируем его, после чего повторяем проверку. Ключ берём не
-      # из воздуха, а из самой подписи: fingerprint в строке
-      # "using ... key <40-hex>"; последние 16 hex — keyid.
-      warn "авто-получение ключа с keyserver не сработало — пробую запасной путь (curl + HTTPS)..."
-      local fp keyid keyfile
-      fp="$(grep -oE '[0-9A-F]{40}' /tmp/xros-gpg-verify.log | tail -1)"
-      keyid="${fp:24:16}"
-      keyfile="$BUILD_ENV/.bootstrap-signing-key.asc"
-      if [[ -n "$keyid" ]] && curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${keyid}" -o "$keyfile" \
-          && gpg --import "$keyfile" >/dev/null 2>&1; then
-        log "ключ $keyid импортирован через curl; повторяю проверку подписи..."
-        gpg --verify "$BOOTSTRAP_SIG" "$BOOTSTRAP_FILE" \
-          || die "подпись bootstrap НЕ СОВПАЛА. Файл не используется — удалите $BOOTSTRAP_FILE и разберитесь, прежде чем продолжать."
-      else
-        cat /tmp/xros-gpg-verify.log >&2
-        die "подпись bootstrap НЕ ПРОВЕРЕНА (ключ получить не удалось). Файл не используется — удалите $BOOTSTRAP_FILE и разберитесь, прежде чем продолжать."
-      fi
+    log "проверяю подпись GPG (ключ Arch закреплён: $ARCH_BOOTSTRAP_KEY_FPR)..."
+    # Ключ получаем по закреплённому отпечатку по HTTPS: dirmngr прокси
+    # не наследует, поэтому auto-key-retrieve на этом хосте не работает.
+    local keyfile="$BUILD_ENV/.bootstrap-signing-key.asc"
+    if ! gpg --list-keys "$ARCH_BOOTSTRAP_KEY_FPR" >/dev/null 2>&1; then
+      curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${ARCH_BOOTSTRAP_KEY_FPR}" \
+          -o "$keyfile" \
+        || die "не удалось получить ключ Arch $ARCH_BOOTSTRAP_KEY_FPR с keyserver.ubuntu.com (HTTPS)"
+      gpg --import "$keyfile" >/dev/null 2>&1 \
+        || die "не удалось импортировать ключ Arch $ARCH_BOOTSTRAP_KEY_FPR"
     fi
+    # Отпечаток импортированного ключа обязан совпасть с константой.
+    gpg --with-colons --list-keys "$ARCH_BOOTSTRAP_KEY_FPR" 2>/dev/null \
+      | awk -F: -v fpr="$ARCH_BOOTSTRAP_KEY_FPR" '$1 == "fpr" && $10 == fpr { found = 1 } END { exit !found }' \
+      || die "в связке нет ключа Arch с отпечатком $ARCH_BOOTSTRAP_KEY_FPR — проверка подписи невозможна"
+    gpg --status-fd 1 --verify "$BOOTSTRAP_SIG" "$BOOTSTRAP_FILE" 2>/dev/null \
+      | awk -v fpr="$ARCH_BOOTSTRAP_KEY_FPR" '
+          $1 == "[GNUPG:]" && $2 == "VALIDSIG" && $3 == fpr { ok = 1 }
+          END { exit !ok }' \
+      || die "подпись bootstrap НЕ СОВПАЛА с ключом Arch $ARCH_BOOTSTRAP_KEY_FPR. Файл не используется — удалите $BOOTSTRAP_FILE и разберитесь, прежде чем продолжать."
     log "подпись bootstrap: OK"
   else
     # A-08: отсутствие/пустота .sig — die, а не warn: установка
-    # непроверенного bootstrap недопустима. Отпечаток ключа Arch
-    # НЕ закреплён: в репозитории/документации проекта его нет,
-    # выдумывать отпечаток нельзя — ключ берётся из самой подписи
-    # (см. запасной путь выше).
+    # непроверенного bootstrap недопустима.
     die "подпись .sig отсутствует или пуста ($BOOTSTRAP_SIG) — без проверенной подписи bootstrap не используется"
   fi
 }
@@ -491,7 +500,7 @@ install_build_tools() {
   # нет). Собственная зависимость xros-branding ставится отдельно:
   # сначала собирается и устанавливается пакет xros-branding
   # (pacman -U внутри rootfs), и только потом остальные три пакета.
-  chroot_env pacman -Sy --noconfirm base-devel rust grub git pacman-contrib \
+  chroot_env pacman -Sy --needed --noconfirm base-devel rust grub git pacman-contrib \
     archiso squashfs-tools libisoburn mtools \
     dialog rsync parted dosfstools e2fsprogs btrfs-progs xfsprogs gptfdisk \
     efibootmgr os-prober libxkbcommon-x11 python-pyqt6 \
@@ -824,7 +833,11 @@ do_build_rust() {
       log "возвращаю в проект: бинарь -> $stage ..."
       run_in_rootfs root -- bash -c 'cp "/home/builder/xros-build/'"$name"'/'"$target_dir"'/release/'"$bin"'" "/xros/'"$stage"'"' \
         || die "не удалось вернуть артефакты $crate в проект"
-      log "готово: $crate -> $PROJECT/$stage"
+      # Хеш источников нужен xros-diagnose.sh для проверки свежести бинаря.
+      local src_sha
+      src_sha="$(run_in_rootfs root -- bash -c 'cd /xros/'"$crate"' && sha256sum Cargo.toml Cargo.lock src/*.rs 2>/dev/null | sort -k2 | sha256sum | cut -d" " -f1')"
+      run_in_rootfs root -- bash -c 'printf "%s\n" '"$src_sha"' > "/xros/'"$stage"'.sha256"'
+      log "готово: $crate -> $PROJECT/$stage (src-sha256: ${src_sha:0:16}...)"
     fi
   done
   touch "$DEPS_MARKER"

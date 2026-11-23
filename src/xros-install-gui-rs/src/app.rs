@@ -94,6 +94,15 @@ pub struct Choices {
     pub office: String,
 }
 
+impl Choices {
+    // Конфиг с паролями записан под 0600 — копии в GUI больше не нужны.
+    pub fn clear_secrets(&mut self) {
+        self.userpass = String::new();
+        self.pass2 = String::new();
+        self.rootpass = String::new();
+    }
+}
+
 impl Default for Choices {
     fn default() -> Self {
         Self {

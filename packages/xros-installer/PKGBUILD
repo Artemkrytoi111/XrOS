@@ -9,15 +9,12 @@
 # их кладёт туда этап сборки (scripts/build.sh) из актуальных
 # исходников; prepare() ниже проверяет, что копии свежие, и роняет
 # сборку, если исходник новее staged-файла.
-# PLACEHOLDER: https://xros.example — домена не существует,
-# настоящий домен/сайт XrOS ещё не выбран (см. ARCHITECTURE.md).
 
 pkgname=xros-installer
 pkgver=1.0
 pkgrel=6
 pkgdesc="Установщик XrOS: консольный, графический Diamond (QML) и запасной Rust GUI"
 arch=('x86_64')
-url="https://xros.example"
 license=('custom:XrOS')
 depends=('bash' 'dialog' 'rsync' 'parted' 'dosfstools' 'e2fsprogs' 'btrfs-progs'
          'xfsprogs' 'gptfdisk' 'grub' 'efibootmgr' 'os-prober' 'libxkbcommon-x11'
@@ -26,7 +23,8 @@ depends=('bash' 'dialog' 'rsync' 'parted' 'dosfstools' 'e2fsprogs' 'btrfs-progs'
 options=('!debug' '!strip')
 source=('xros-install'
         'xros-install-gui')
-sha256sums=('SKIP' 'SKIP')
+sha256sums=('47ca723225161a370168793c9b47b5e49a10e9b361cc282a63e5ff8df1daa50b'
+            'cf3cdd2e729580b318b6e0a6511f5eb700e76395dcf7aa073315de140545cb8c')
 # Diamond (каталог, НЕ в source=): makepkg не умеет каталог как источник
 # («not found in the build directory») — staged-каталог лежит рядом
 # с PKGBUILD, prepare()/package() обращаются к нему через $startdir.

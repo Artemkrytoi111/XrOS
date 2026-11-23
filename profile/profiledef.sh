@@ -6,9 +6,7 @@
 
 iso_name="xros"
 iso_label="XROS_202611"
-# PLACEHOLDER: домен xros.example не существует — заменить на настоящий
-# домен при публикации (см. AUDIT-REPORT.md).
-iso_publisher="XrOS <https://xros.example>"
+iso_publisher="XrOS"
 iso_application="XrOS 1.0"
 iso_version="1.0"
 install_dir="xros"

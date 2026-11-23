@@ -164,7 +164,8 @@ xros_cleanup() {
   XROS_CLEANUP_DONE=1
   say "Остановка установки (${XROS_STOP_REASON:-без указания причины}) — очистка..."
   xros_kill_children
-  umount -R "$TARGET" 2>/dev/null || true
+  # Таймаут: занятая точка не должна вешать cleanup навсегда.
+  timeout 15 umount -R "$TARGET" 2>/dev/null || true
   rm -f /tmp/xros-de-result /tmp/xros-install.conf
   sync 2>/dev/null || true
   say "Очистка завершена: $TARGET размонтирован, временные файлы удалены"
@@ -254,7 +255,11 @@ fi
 # только глушим сторожа.
 xros_on_exit() {
   local rc=$?
-  [[ -n "${XROS_WATCHDOG_PID:-}" ]] && kill "$XROS_WATCHDOG_PID" 2>/dev/null || true
+  # kill с пустым PID не должен принимать текущую группу за цель:
+  # side-effects от `&&`/`||` тут важнее читаемости.
+  if [[ -n "${XROS_WATCHDOG_PID:-}" ]]; then
+    kill "$XROS_WATCHDOG_PID" 2>/dev/null || true
+  fi
   if [[ $rc -ne 0 && "${XROS_INSTALLING:-0}" == "1" && "$XROS_CLEANUP_DONE" != "1" ]]; then
     XROS_STOP_REASON="ошибка установки (код $rc)"
     xros_cleanup
@@ -1003,7 +1008,12 @@ if [[ -n "$NONINTERACTIVE" ]]; then
   # Имя компьютера — только безопасные символы: иначе перевод строки
   # или пробелы из GUI сломали бы /etc/hostname и /etc/hosts.
   HOSTNAME=$(printf '%s' "$HOSTNAME" | tr -cd 'a-zA-Z0-9.-')
-  [[ -n "$HOSTNAME" ]] || HOSTNAME="xros-os"
+  # RFC 1123: без точек/дефисов по краям и без двойных точек.
+  # Не прошло — заменяем на безопасное значение.
+  if ! [[ "$HOSTNAME" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]] \
+     || [[ "$HOSTNAME" == *..* || "$HOSTNAME" == *.-* || "$HOSTNAME" == *-. ]]; then
+    HOSTNAME="xros-os"
+  fi
   FULLNAME=$(printf '%s' "${FULLNAME:-}" | tr -d '\r\n')
   case "${FS:-ext4}" in ext4|btrfs|xfs) ;; *) FS="ext4" ;; esac
   # Часовой пояс и раскладка из конфига — не из фиксированного списка
@@ -1139,7 +1149,10 @@ else
   # пробелы из диалога сломали бы /etc/hostname и /etc/hosts
   # (в неинтерактивном режиме та же чистка есть с первого аудита).
   HOSTNAME=$(printf '%s' "$HOSTNAME" | tr -cd 'a-zA-Z0-9.-')
-  [[ -n "$HOSTNAME" ]] || HOSTNAME="xros-os"
+  if ! [[ "$HOSTNAME" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]] \
+     || [[ "$HOSTNAME" == *..* || "$HOSTNAME" == *.-* || "$HOSTNAME" == *-. ]]; then
+    HOSTNAME="xros-os"
+  fi
   # A-31: имя пользователя — в цикле: зарезервированное системное имя
   # отклоняется с объяснением, а не падает молча (см. xros_reserved_user).
   while true; do
@@ -1466,8 +1479,7 @@ run_install() {
   # os-release: те же поля версии, что в живой системе, плюс
   # VARIANT_ID=installed — штатный маркер os-release(5) для отличия
   # установленной системы от живой (hostnamectl его показывает).
-  # PLACEHOLDER: URL https://xros.example/ — домен не существует,
-  # заменить на настоящий при публикации (как в живом os-release).
+  # URL не публикуем: домена проекта пока нет.
   # /etc/os-release — ссылка на /usr/lib/os-release, как в живой
   # системе; пересоздаём её явно, чтобы она не указывала в никуда.
   cat > "$TARGET/usr/lib/os-release" <<'OS_EOF' \
@@ -1482,11 +1494,6 @@ VERSION_ID="1.0"
 VARIANT="Installed system"
 VARIANT_ID=installed
 ANSI_COLOR="38;2;139;0;255"
-# PLACEHOLDER: URL https://xros.example/ — домен не существует, заменить на настоящий при публикации.
-HOME_URL="https://xros.example/"
-DOCUMENTATION_URL="https://xros.example/"
-SUPPORT_URL="https://xros.example/"
-BUG_REPORT_URL="https://xros.example/"
 LOGO=xros
 IMAGE_ID=xros
 IMAGE_VERSION=1.0
@@ -1645,8 +1652,12 @@ GRUBEOF
 locale-gen
 systemd-machine-id-setup || true
 useradd -m -G wheel,audio,video,optical,storage -s /bin/bash -c $FULLNAME_Q $USERNAME_Q || useradd -m -G wheel -s /bin/bash -c $FULLNAME_Q $USERNAME_Q
-echo root:$ROOTPASS_Q | chpasswd
-echo $USERNAME_Q:$USERPASS_Q | chpasswd
+# stderr chpasswd — в отдельный файл, а не в $LOG: shadow в некоторых
+# версиях печатает в stderr строку login:password при синтаксической
+# ошибке, и пароль попал бы в журнал установки (успешный путь его не
+# содержит). Сам файл удаляется сразу после chroot (см. ниже).
+echo root:$ROOTPASS_Q | chpasswd 2>>/tmp/xros-chpasswd.err
+echo $USERNAME_Q:$USERPASS_Q | chpasswd 2>>/tmp/xros-chpasswd.err
 # Обои XrOS для нового пользователя (fixed10, D4): тот же one-shot
 # механизм, что и в живой системе (xros-set-wallpaper + autostart).
 # Готовый appletsrc НЕ копируем: Plasma 6.8 мигрирует чужой appletsrc
@@ -1667,6 +1678,10 @@ chmod 440 /etc/sudoers.d/wheel
 systemctl enable NetworkManager.service
 mkinitcpio -P
 CHROOT_EOF
+  # chpasswd пишет stderr (включая строку login:password при синтаксической
+  # ошибке) в изолированный файл: в $LOG он не попадает, а живёт только
+  # до конца установки. При сбое chroot файл полезен для диагностики.
+  rm -f "$TARGET/tmp/xros-chpasswd.err"
   if [[ $UEFI -eq 1 ]]; then
     arch-chroot "$TARGET" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=XrOS --recheck >>"$LOG" 2>&1 \
       || { say "ОШИБКА: grub-install (UEFI) не удался — см. $LOG"; exit 1; }
@@ -1999,7 +2014,7 @@ if [[ -n "$NONINTERACTIVE" ]]; then
 fi
 
 run_install | dialog --backtitle "$BACKTITLE" --title "$TITLE" --gauge "Установка XrOS на $DISK..." 10 70 0
-RC=$?
+RC=${PIPESTATUS[0]}
 if [[ $RC -ne 0 ]]; then
   # run_install работает в подшелле пайплайна: его `exit 1` не доходит
   # до ловушки EXIT основной оболочки (XROS_INSTALLING ставится

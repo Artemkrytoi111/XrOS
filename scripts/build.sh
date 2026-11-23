@@ -258,7 +258,13 @@ fi
 step "Синхронизация копии профиля в build-env"
 [[ "$PROFILE_MIRROR" == "$ROOTFS/home/builder/profile" ]] \
     || die "внутренняя ошибка: неожиданный путь зеркала профиля"
-rm -rf "$PROFILE_MIRROR"
+# Защита от rm -rf по неожиданному пути: удаляем ТОЛЬКО строго
+# внутри build-env rootfs, ожидаемое имя каталога — фиксировано.
+case "$PROFILE_MIRROR" in
+  "$ROOTFS"/home/builder/profile) ;;
+  *) die "внутренняя ошибка: отказ удалять зеркало профиля по неожиданному пути: $PROFILE_MIRROR" ;;
+esac
+rm -rf -- "$PROFILE_MIRROR"
 cp -a "$PROFILE" "$PROFILE_MIRROR"
 # ВАЖНО: cp -a сохраняет root-владельца файлов профиля. Но шаг 6
 # (do_makepkg) чистит /home/builder/profile командой rm -rf ОТ
@@ -302,7 +308,12 @@ step "Стейджинг исходников в packages/"
 cp "$ROOT/src/xros-install" "$ROOT/packages/xros-installer/xros-install"
 cp "$ROOT/src/xros-welcome-gui" "$ROOT/packages/xros-welcome/xros-welcome-gui"
 # Diamond: staged-копия приложения для пакета xros-installer.
-rm -rf "$ROOT/packages/xros-installer/xros-installer-diamond"
+DIAMOND_STAGE="$ROOT/packages/xros-installer/xros-installer-diamond"
+case "$DIAMOND_STAGE" in
+  "$ROOT"/packages/xros-installer/xros-installer-diamond) ;;
+  *) die "внутренняя ошибка: отказ удалять staged-каталог по неожиданному пути: $DIAMOND_STAGE" ;;
+esac
+rm -rf -- "$DIAMOND_STAGE"
 cp -r "$ROOT/src/xros-installer-diamond" "$ROOT/packages/xros-installer/xros-installer-diamond"
 rm -rf "$ROOT/packages/xros-installer/xros-installer-diamond/__pycache__"
 cp "$ROOT/branding/xros-logo.png" "$ROOT/branding/xros-logo-small.png" \
@@ -377,7 +388,11 @@ fi
 # --- шаг 8: снимок репозитория в живую систему --------------------------------------
 step "Снимок репозитория в profile/airootfs/usr/share/xros/repo/"
 REPO_SNAP="$PROFILE/airootfs/usr/share/xros/repo"
-rm -rf "$REPO_SNAP"
+case "$REPO_SNAP" in
+  "$ROOT"/profile/airootfs/usr/share/xros/repo) ;;
+  *) die "внутренняя ошибка: отказ удалять снимок репозитория по неожиданному пути: $REPO_SNAP" ;;
+esac
+rm -rf -- "$REPO_SNAP"
 mkdir -p "$REPO_SNAP"
 # Режим снимка — 0755 явно: mkdir -p под umask 0007 даёт 0770,
 # а диагностика требует 0755 (fixed10, Этап 2, 11.11.2026).
@@ -401,13 +416,18 @@ cp -a --no-preserve=ownership "$ROOT/repo/xros" "$REPO_SNAP/"
 # копируется: он только для xros-gpg-test/. Источник истины —
 # profile/airootfs/usr/share/xros/xros-gpg.conf (XROS_GPG_PROD_FPR,
 # XROS_GPG_PROD_KEY). Пока FPR пуст — production GPG не настроен:
-# dev-сборка продолжается с явным предупреждением (SigLevel=Optional),
+# dev-сборка требует явного XROS_DEV_UNSIGNED=1 (SigLevel=Optional),
 # релизная сборка (--release) блокируется гейтом на старте.
 # shellcheck disable=SC1091
 . "$PROFILE/airootfs/usr/share/xros/xros-gpg.conf"
 if [[ -z "${XROS_GPG_PROD_FPR:-}" ]]; then
     rm -f "$PROFILE/airootfs/usr/share/xros/xros-public.key"
-    echo "ПРЕДУПРЕЖДЕНИЕ: production GPG не настроен (XROS_GPG_PROD_FPR пуст в xros-gpg.conf) — dev-режим: ключ XrOS не попадёт в живую систему, SigLevel=Optional; релизная сборка (--release) заблокирована"
+    # Пустой FPR = сборка с SigLevel=Optional и без проверки [xros].
+    # Требуем явное согласие, чтобы пустой конфиг не давал релизный ISO.
+    if [[ "${XROS_DEV_UNSIGNED:-}" != "1" ]]; then
+        die "production GPG не настроен (XROS_GPG_PROD_FPR пуст в xros-gpg.conf): это dev-сборка с SigLevel=Optional и без проверки подписи [xros]. Если это осознанно — запустите с XROS_DEV_UNSIGNED=1."
+    fi
+    echo "ПРЕДУПРЕЖДЕНИЕ: production GPG не настроен (XROS_GPG_PROD_FPR пуст в xros-gpg.conf) — dev-режим (XROS_DEV_UNSIGNED=1): ключ XrOS не попадёт в живую систему, SigLevel=Optional; такая сборка НЕ годится для релиза"
 elif [[ ! -f "$ROOT/${XROS_GPG_PROD_KEY:-xros-gpg-prod/xros-public.key}" ]]; then
     die "production GPG: XROS_GPG_PROD_FPR задан, но нет файла ключа $ROOT/${XROS_GPG_PROD_KEY:-xros-gpg-prod/xros-public.key} — положите публичный ключ (см. xros-gpg-prod/README.md)"
 else
@@ -547,9 +567,21 @@ MK_LOG="$OUT/mkarchiso.log"
 "$BUILD_ENV" --exec -- mkarchiso -v -w /xros/work -o /xros/out /xros/profile >"$MK_LOG" 2>&1 \
     || { tail -30 "$MK_LOG" >&2; die "mkarchiso не удался (лог: $MK_LOG). Если падение — на pacstrap полного списка (Write failed + EPERM), СТОП: разобрать причину, ручной pacstrap и маркеры base.* — только с явного разрешения, см. шапку файла."; }
 echo "mkarchiso завершён (лог: $MK_LOG)"
-ISO="$(ls "$OUT"/xros-*.iso 2>/dev/null | grep -v -e '-hybrid\.iso$' | head -1)"
+ISO=""
+for f in "$OUT"/xros-*.iso; do
+  [[ -e "$f" ]] || continue
+  [[ "$f" == *-hybrid.iso$ ]] && continue
+  ISO="$f"
+  break
+done
 [[ -n "$ISO" ]] || die "mkarchiso не создал ISO в $OUT"
-[[ "$(ls "$OUT"/xros-*.iso 2>/dev/null | grep -v -e '-hybrid\.iso$' | wc -l)" -eq 1 ]] \
+count=0
+for f in "$OUT"/xros-*.iso; do
+  [[ -e "$f" ]] || continue
+  [[ "$f" == *-hybrid.iso$ ]] && continue
+  count=$((count+1))
+done
+[[ "$count" -eq 1 ]] \
     || die "в $OUT больше одного ISO от mkarchiso — непонятно, какой обрабатывать"
 echo "ISO от mkarchiso: $ISO ($(stat -c%s "$ISO") Б)"
 

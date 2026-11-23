@@ -191,6 +191,16 @@ case "$DIAG_SUM" in *" FAIL=0 "*) log "Диагностика: FAIL=0 — идё
 log "=== шаг 1: чистый старт work/ (логи out/ сохраняются) ==="
 PREV="$OUT/prev-logs-$(date -u '+%Y%m%d-%H%M%S')"
 mkdir -p "$PREV"
+# Guard: WORK/OUT задаются в этом же скрипте, но rm -rf должен упасть,
+# а не удалить / или домашний каталог, если переменная окажется пустой.
+case "$WORK" in
+  */work) ;;
+  *) die "WORK=$WORK вне ожидаемой формы — отказ от rm -rf" ;;
+esac
+case "$OUT" in
+  */out) ;;
+  *) die "OUT=$OUT вне ожидаемой формы — отказ от rm" ;;
+esac
 # Сохраняем старые логи и отчёты, не удаляя их молча.
 for f in "$OUT"/*.log; do [[ -e "$f" ]] && cp -a "$f" "$PREV/" 2>/dev/null || true; done
 log "Старые логи скопированы в $PREV"

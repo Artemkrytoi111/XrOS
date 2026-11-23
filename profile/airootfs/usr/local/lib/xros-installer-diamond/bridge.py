@@ -10,6 +10,7 @@
 """
 import json
 import os
+import errno
 import shlex
 import signal
 import stat
@@ -21,6 +22,26 @@ from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
 CONF_PATH = "/tmp/xros-install.conf"
 LOG_PATH = "/tmp/xros-install.log"
 ENGINE = "/usr/local/bin/xros-install"
+
+# Переменные окружения, передаваемые движку установки (работает от root).
+# Остальное (PYTHONPATH, QT_*, QML2_*, LD_LIBRARY_PATH) не передаётся:
+# иначе можно подсунуть root-процессу свои плагины/библиотеки.
+SAFE_ENV_KEYS = frozenset({
+    "PATH", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES",
+    "DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "XAUTHORITY",
+    "DBUS_SESSION_BUS_ADDRESS", "XDG_SESSION_TYPE", "XDG_SESSION_DESKTOP",
+    "XROS_NONINTERACTIVE", "XROS_INSTALL_CONF",
+})
+
+
+def safe_env() -> dict[str, str]:
+    env = {}
+    for k in SAFE_ENV_KEYS:
+        v = os.environ.get(k)
+        if v is not None:
+            env[k] = v
+    return env
+
 
 # Зарезервированные системные имена (A-31, тот же список, что
 # в src/xros-install: XROS_RESERVED_USERS).
@@ -101,21 +122,36 @@ def _device_readable(path: str) -> bool:
 
 def _secure_create(path: str):
     """Безопасное создание файла (A-13): O_CREAT|O_EXCL, 0o600.
-    Существующий файл/symlink сначала удаляется — иначе конфиг/лог
-    можно подменить symlink'ом на чужой файл. O_EXCL не следует
-    по symlink'ам, поэтому создание после unlink безопасно.
-    Возвращает fd или None при неудаче."""
-    for _attempt in range(2):
-        try:
-            return os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
-            try:
-                os.unlink(path)
-            except Exception:
-                return None
-        except Exception:
+    O_CREAT|O_EXCL не следует по symlink'ам (POSIX: open() с O_EXCL
+    падает, если путь — существующий symlink), поэтому при первом
+    создании symlink'у в /tmp файл не подменят. Если файл уже
+    существует (остаток упавшего запуска), он проверяется через
+    lstat и удаляется: только обычный файл или сам symlink (цель
+    symlink НЕ затрагивается); FIFO/блочные устройства не трогаем.
+    Повторное создание снова атомарное. Возвращает fd или None."""
+    try:
+        return os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        pass
+    except OSError:
+        return None
+    # Файл уже существует — безопасная очистка.
+    try:
+        st = os.lstat(path)
+        if stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode):
+            os.unlink(path)
+        else:
+            # FIFO, сокет, каталог — не наше; не трогаем.
             return None
-    return None
+    except FileNotFoundError:
+        pass  # между проверкой и удалением файл исчез — норм
+    except OSError:
+        return None
+    try:
+        return os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except OSError:
+        # Кто-то успел занять имя снова (гонка) — отказ, а не зацикливание.
+        return None
 
 
 def _shell_quote(value: str) -> str:
@@ -314,9 +350,22 @@ class InstallerBridge(QObject):
         if "USERNAME" in settings and self.checkUsername(str(settings["USERNAME"])):
             return False
         lines = []
+        # Обеспечиваем, что каждая непустая строка не содержит переносов.
+        # Пустые значения допустимы: GUI официально не передаёт
+        # ROOT_PART/EFI_PART в режиме erase и т.п. Они пропускаются.
         for key in sorted(allowed):
-            if key in settings and settings[key] != "":
-                lines.append(f"{key}={_shell_quote(str(settings[key]))}")
+            if key not in settings:
+                continue
+            value = str(settings[key])
+            if value == "":
+                continue
+            # Запрет на перенос строки: значение иначе добавит новую пару
+            # KEY=VALUE в конфиг и подменит параметры установки. Движок
+            # конфиг СОРСИТ (. "$CONF"), поэтому перевод строки — это
+            # исполнение чужого кода от root.
+            if "\n" in value or "\r" in value:
+                return False
+            lines.append(f"{key}={_shell_quote(value)}")
         # A-13: безопасное создание (unlink + O_EXCL, 0o600) вместо
         # open("w") + chmod: старый путь следовал по symlink'у.
         fd = _secure_create(CONF_PATH)
@@ -342,7 +391,7 @@ class InstallerBridge(QObject):
             return False
         os.close(fd)
         self._log_pos = 0
-        env = dict(os.environ)
+        env = safe_env()
         env["XROS_NONINTERACTIVE"] = "1"
         env["XROS_INSTALL_CONF"] = CONF_PATH
         try:

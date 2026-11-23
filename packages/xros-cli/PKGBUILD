@@ -16,15 +16,12 @@
 # системе, ни установщиком). Включать их нельзя, пока нет
 # подписанного репозитория [xros]; модель обновлений — см. README
 # репозитория и ARCHITECTURE.md.
-# PLACEHOLDER: https://xros.example — домена не существует,
-# настоящий домен/сайт XrOS ещё не выбран (см. ARCHITECTURE.md).
 
 pkgname=xros-cli
 pkgver=1.0
 pkgrel=2
 pkgdesc="Команда xros: информация о системе и обновление"
 arch=('x86_64')
-url="https://xros.example"
 license=('custom:XrOS')
 depends=('glibc' 'xros-branding')
 options=('!debug' '!strip')
@@ -35,7 +32,9 @@ options=('!debug' '!strip')
 source=('xros'
         'xros-update.service'
         'xros-update.timer')
-sha256sums=('SKIP' 'SKIP' 'SKIP')
+sha256sums=('9c67cfdcc1b50998e05be1d0c9efd6d1325473731b8b7de6971ebe049954e1aa'
+            '24d4960e4fa92535544403021bf41fa90623f57c7786b3fe52fbbb41c16fa7ac'
+            '7fc4dd5f22bd065707f7eb1bfe6facffe8167e936b60b8bddc525d065a4c41d4')
 
 prepare() {
   # Бинарь: ни один исходник не должен быть новее бинаря.

@@ -398,7 +398,7 @@ fn show_install(app: &mut App, ui: &mut egui::Ui) {
     let btn = egui::Button::new(RichText::new("Установить").strong().color(Color32::WHITE))
         .fill(theme::ACCENT);
     if ui.add_enabled(!app.installing, btn).clicked() {
-        match install::start_install(&app.sel) {
+        match install::start_install(&mut app.sel) {
             Ok((rx, handle)) => {
                 app.rx = Some(rx);
                 app.child = Some(handle);

@@ -99,6 +99,18 @@ main() {
     return 0
   fi
 
+  # Проверяем, что репозиторий [xros] требует подписи — иначе автообновление
+  # может поставить неподписанный/поддельный пакет. Fail-closed.
+  if ! awk '
+    /^\[xros\]$/ { in_xros=1; next }
+    /^\[/ { in_xros=0 }
+    in_xros && /^[[:space:]]*SigLevel[[:space:]]*=[[:space:]]*Required([[:space:]]|$)/ { found=1 }
+    END { exit(found ? 0 : 1) }
+  ' /etc/pacman.conf; then
+    log "ОШИБКА: в pacman.conf SigLevel для [xros] не Required — автообновление отключено для безопасности"
+    return 1
+  fi
+
   # Шаг 1: обновление баз (все репозитории, включая [xros]).
   run_pacman "обновление баз (pacman -Sy)" pacman -Sy || return 1
 
