@@ -861,9 +861,11 @@ mkfs_root() {
 # GUI (src/xros-install-gui-rs/src/install.rs) и dialog --gauge понимают
 # ТОЛЬКО протокол gauge: число = процент, XXX/сообщение/XXX, маркеры
 # INSTALL_DONE/INSTALL_FAILED. Сырой вывод rsync им не нужен и туда
-# не идёт — поэтому rsync остаётся на переднем плане с тем же вызовом
-# (та же строка, та же проверка ошибки — см. T0a7 в test-installer-security.sh),
-# а рядом, в фоне, работает этот опросчик: он читает из $LOG свежие строки
+# не идёт — поэтому rsync работает в фоне + wait с тем же вызовом
+# (та же строка, та же проверка ошибки — см. T0a7 в test-installer-security.sh):
+# на переднем плане bash 5.3 теряет отложенную ловушку, если команду
+# убивает тот же SIGTERM, а под wait ловушка срабатывает сразу.
+# Рядом, в фоне, работает этот опросчик: он читает из $LOG свежие строки
 # progress2 (формат с --human-readable: `  41.94M  57%  689.12MB/s  0:00:00 ...`)
 # и печатает в stdout gauge-числа 30..60 и XXX-статус с размером
 # и скоростью в МБ/ГБ. Процент rsync — кумулятивный (байты уже
@@ -1448,11 +1450,15 @@ run_install() {
   XROS_LOG_OFF=$(stat -c %s "$LOG" 2>/dev/null || echo 0)
   xros_rsync_gauge "$XROS_LOG_OFF" &
   XROS_RSYNC_GAUGE_PID=$!
+  # rsync — в фоне + wait: ловушка срабатывает сразу (bash 5.3 теряет
+  # отложенную ловушку, если переднюю команду убивает тот же SIGTERM).
   rsync -aAX --info=progress2 --human-readable --exclude='/dev/*' --exclude='/proc/*' --exclude='/sys/*' \
     --exclude='/tmp/*' --exclude='/run/*' --exclude='/mnt/*' --exclude='/media/*' \
     --exclude='/lost+found' --exclude='/var/cache/pacman/pkg/*' --exclude='/var/log/journal/*' \
     --exclude='/etc/ssh/ssh_host_*' --exclude='/etc/pacman.d/gnupg/*' \
-    / "$TARGET"/ >>"$LOG" 2>&1 || { say "ОШИБКА: копирование живой системы не удалось — см. $LOG"; exit 1; }
+    / "$TARGET"/ >>"$LOG" 2>&1 &
+  XROS_RSYNC_PID=$!
+  wait "$XROS_RSYNC_PID" || { say "ОШИБКА: копирование живой системы не удалось — см. $LOG"; exit 1; }
   kill "$XROS_RSYNC_GAUGE_PID" 2>/dev/null || true
   wait "$XROS_RSYNC_GAUGE_PID" 2>/dev/null || true
 
