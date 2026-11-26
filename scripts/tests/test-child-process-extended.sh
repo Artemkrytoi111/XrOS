@@ -52,6 +52,11 @@ FAILED_NAMES=""
 ok()   { PASS=$((PASS+1)); echo "PASS: $1"; }
 bad()  { FAIL=$((FAIL+1)); FAILED_NAMES="$FAILED_NAMES $1"; echo "FAIL: $1"; }
 skip() { SKIPN=$((SKIPN+1)); echo "SKIP: $1"; }
+# Пробы окружения: E6/E8/E9 нужен unshare -rm, проверка зомби — systemd как PID 1.
+CAN_UNSHARE=0
+if unshare -rm true 2>/dev/null; then CAN_UNSHARE=1; fi
+IS_SYSTEMD_PID1=0
+[[ "$(cat /proc/1/comm 2>/dev/null)" == "systemd" ]] && IS_SYSTEMD_PID1=1
 
 wait_gone() {
   local pid="$1" timeout="$2" i=0 st
@@ -575,7 +580,9 @@ run_parent_loss_test() {
     kill -KILL -"$engine_pid" 2>/dev/null || true
     return
   fi
-  if wait_vanished "$engine_pid" 5; then
+  if [[ "$IS_SYSTEMD_PID1" == "0" ]]; then
+    skip "$name: движок полностью исчез из /proc (без зомби) — PID 1 не systemd, зомби некому подобрать (контейнер)"
+  elif wait_vanished "$engine_pid" 5; then
     ok "$name: движок полностью исчез из /proc (без зомби)"
   else
     bad "$name: движок полностью исчез из /proc (без зомби)"
@@ -801,6 +808,9 @@ result_val() { # $1=result.txt $2=ключ
 
 # ================= E8: ошибка копирования (rsync -> 1) =================
 echo "== E8: ошибка во время копирования (реальный движок, rsync=1) =="
+if [[ "$CAN_UNSHARE" == "0" ]]; then
+  skip "E8a–E8h реальный движок в unshare -rm: unshare недоступен в этом окружении (контейнер)"
+else
 run_real_engine "e8" "fail" 0 0
 R="$T/e8/result.txt"
 [[ "$(result_val "$R" rc)" == "1" ]] \
@@ -828,9 +838,13 @@ uc=$(result_val "$R" umount_calls); uc=${uc:-0}
 [[ "$uc" -ge 2 ]] \
   && ok "E8h: umount вызван >=2 раз (до разметки + cleanup), вызовов: $uc" \
   || bad "E8h: umount вызван >=2 раз (до разметки + cleanup), вызовов: $uc"
+fi
 
 # ================= E9: ошибка подготовки разделов (mkfs -> 1) =================
 echo "== E9: ошибка во время подготовки разделов (реальный движок, mkfs=1) =="
+if [[ "$CAN_UNSHARE" == "0" ]]; then
+  skip "E9a–E9h реальный движок в unshare -rm: unshare недоступен в этом окружении (контейнер)"
+else
 run_real_engine "e9" "fail" 1 0
 R="$T/e9/result.txt"
 [[ "$(result_val "$R" rc)" == "1" ]] \
@@ -858,9 +872,13 @@ uc=$(result_val "$R" umount_calls); uc=${uc:-0}
 [[ "$uc" -ge 2 ]] \
   && ok "E9h: umount вызван >=2 раз (до разметки + cleanup), вызовов: $uc" \
   || bad "E9h: umount вызван >=2 раз (до разметки + cleanup), вызовов: $uc"
+fi
 
 # ================= E6: гибель потомка (rsync убит извне) =================
 echo "== E6: гибель процесса-потомка (реальный движок, rsync SIGKILL) =="
+if [[ "$CAN_UNSHARE" == "0" ]]; then
+  skip "E6a–E6g реальный движок в unshare -rm: unshare недоступен в этом окружении (контейнер)"
+else
 run_real_engine "e6" "slow" 0 1
 R="$T/e6/result.txt"
 [[ "$(result_val "$R" rc)" == "1" ]] \
@@ -884,6 +902,7 @@ R="$T/e6/result.txt"
 [[ "$(result_val "$R" sentinel)" == "ok" ]] \
   && ok "E6g: сентинелы «установленной системы» целы" \
   || bad "E6g: сентинелы «установленной системы» целы ($(result_val "$R" sentinel))"
+fi
 
 # ================= E7: повторная отмена =================
 echo "== E7: двойная отмена (два cancel() подряд) =="
