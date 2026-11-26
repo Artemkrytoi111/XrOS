@@ -509,8 +509,10 @@ run_gui_death_test() {
   wait_gone "$sim_pid" 5 || { bad "$name: GUI не умер от SIG$sig"; }
   if wait_gone "$engine_pid" 10; then
     ok "$name: движок завершён за <=10 с после SIG$sig GUI (PDEATHSIG)"
+    echo "DIAG $name: движок умер сам за <=10 с (без fallback SIGKILL)"
   else
     bad "$name: движок завершён за <=10 с после SIG$sig GUI (PDEATHSIG)"
+    echo "DIAG $name: движок НЕ умер за 10 с — fallback SIGKILL группе"
     kill -KILL -"$engine_pid" 2>/dev/null || true
     return
   fi
@@ -520,6 +522,11 @@ run_gui_death_test() {
   [[ ! -f /tmp/xros-de-result && ! -f /tmp/xros-install.conf ]] \
     && ok "$name: временные файлы удалены" \
     || bad "$name: временные файлы удалены"
+  if ! grep -q "Очистка завершена" "$log" 2>/dev/null; then
+    echo "--- DIAG $name engine.log ---"
+    cat "$log" 2>/dev/null || echo "(лог пуст или отсутствует)"
+    echo "--- DIAG $name end engine.log ---"
+  fi
   grep -q "umount -R $target" "$T/umount.calls" 2>/dev/null \
     && ok "$name: umount вызван с TARGET" \
     || bad "$name: umount вызван с TARGET"
