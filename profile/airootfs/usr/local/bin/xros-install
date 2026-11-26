@@ -33,7 +33,7 @@ BANNER=$(cat /usr/share/xros/banner.txt 2>/dev/null || echo "XrOS 1.0")
 
 say() { echo "[xros-install] $*" | tee -a "$LOG"; }
 
-dlg() { dialog --backtitle "$BACKTITLE" --title "$TITLE" --colors "$@" 2>&1 >/dev/tty; }
+dlg() { { dialog --backtitle "$BACKTITLE" --title "$TITLE" --colors "$@" > /dev/tty; } 2>&1; }
 
 NONINTERACTIVE="${XROS_NONINTERACTIVE:-}"
 
@@ -985,7 +985,11 @@ if [[ -n "$NONINTERACTIVE" ]]; then
   CONF="${XROS_INSTALL_CONF:-/tmp/xros-install.conf}"
   [[ -f "$CONF" ]] || { say "ОШИБКА: нет файла настроек $CONF"; exit 1; }
   # shellcheck disable=SC1090
-  set -a; . "$CONF"; set +a
+  # shellcheck source=/dev/null
+set -a
+# shellcheck source=/dev/null
+. "$CONF"
+set +a
   rm -f "$CONF"
   : "${PARTMODE:=erase}"
   : "${FS:=ext4}"
