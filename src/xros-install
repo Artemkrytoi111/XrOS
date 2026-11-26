@@ -986,7 +986,10 @@ if [[ -n "$NONINTERACTIVE" ]]; then
   [[ -f "$CONF" ]] || { say "ОШИБКА: нет файла настроек $CONF"; exit 1; }
   # shellcheck disable=SC1090
 # shellcheck source=/dev/null
-set -a; . "$CONF"; set +a
+set -a
+# shellcheck source=/dev/null
+. "$CONF"
+set +a
   rm -f "$CONF"
   : "${PARTMODE:=erase}"
   : "${FS:=ext4}"
