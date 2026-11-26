@@ -23,7 +23,7 @@ depends=('bash' 'dialog' 'rsync' 'parted' 'dosfstools' 'e2fsprogs' 'btrfs-progs'
 options=('!debug' '!strip')
 source=('xros-install'
         'xros-install-gui')
-sha256sums=('649a0423c33ba680f30a01fd9feed27a8b92ded5849ec4b4159d710d3336f93e'
+sha256sums=('acc840dd8e127b6ff0ba79e1ea3d65461269fdb03d1f8164965719b175f56cef'
             'cf3cdd2e729580b318b6e0a6511f5eb700e76395dcf7aa073315de140545cb8c')
 # Diamond (каталог, НЕ в source=): makepkg не умеет каталог как источник
 # («not found in the build directory») — staged-каталог лежит рядом
