@@ -326,7 +326,7 @@ else
 fi
 
 # ================= D. РЕАЛЬНЫЙ движок в unshare ============================
-if command -v gcc >/dev/null 2>&1 && command -v unshare >/dev/null 2>&1; then
+if command -v gcc >/dev/null 2>&1 && command -v unshare >/dev/null 2>&1 && unshare -rm true 2>/dev/null; then
   # LD_PRELOAD-шим (та же идея, что в test-child-process-extended.sh).
   # XROS_FAKEBLK — список путей через ':' (диск + его разделы):
   # stat() подменяет их тип на блочное устройство, чтобы [[ -b ]]
@@ -579,7 +579,7 @@ EOF
   [[ "$(result_val "$R" sgdisk_called)" == "no" ]] && ok "e2e R-18 head-fail: sgdisk НЕ вызван" || bad "e2e R-18 head-fail: sgdisk НЕ вызван"
   [[ "$(result_val "$R" mkfs_called)" == "no" ]] && ok "e2e R-18 head-fail: mkfs НЕ вызван" || bad "e2e R-18 head-fail: mkfs НЕ вызван"
 else
-  skip "e2e реальный движок в unshare" "нет gcc или unshare на этом хосте"
+  skip "e2e реальный движок в unshare" "нет gcc или unshare -rm не работает в этом окружении"
 fi
 
 # ================= E. Статика: защита и синхронность =======================
