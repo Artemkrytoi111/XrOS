@@ -993,7 +993,7 @@ for t in test-child-process.sh test-child-process-extended.sh; do
       tsum=$(echo "$tout" | grep -oE 'PASS=[0-9]+ FAIL=0( SKIP=[0-9]+)?' | head -1)
       ok "тест $t пройден ($tsum)"
     else
-      echo "$tout" | tail -5; bad "тест $t НЕ пройден"
+      echo "$tout" | tail -200; bad "тест $t НЕ пройден"
     fi
   else
     bad "тест $t отсутствует или не исполняемый"
