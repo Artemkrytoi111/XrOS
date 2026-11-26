@@ -49,6 +49,10 @@ jobs:
     container: archlinux:latest
     steps:
       - uses: actions/checkout@v4
+      - name: Normalize profile permissions (checkout umask 0002)
+        run: |
+          chmod -R g-w profile/airootfs
+          chmod 750 profile/airootfs/root
       - name: Install diagnose deps
         run: pacman -Sy --noconfirm base-devel python
       - name: xros-diagnose
