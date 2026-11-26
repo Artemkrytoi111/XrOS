@@ -79,7 +79,19 @@ fi
 # ---------------------------------------------------------------- 5. PKGBUILD
 if command -v makepkg >/dev/null 2>&1; then
   for p in xros-cli xros-installer xros-welcome xros-branding; do
-        if (cd "packages/$p" && makepkg --asroot --printsrcinfo >"/tmp/makepkg-$p.log" 2>&1); then
+            _mkpkg_dir="packages/$p"
+        _mkpkg_prefix=""
+        if [[ $EUID -eq 0 ]]; then
+          # makepkg has no --asroot since 2015 and refuses to run as root:
+          # run it as nobody in a throwaway copy of the package dir
+          _tmp="$(mktemp -d)"
+          cp -r "packages/$p" "$_tmp/$p"
+          chmod -R a+rwX "$_tmp"
+          _mkpkg_dir="$_tmp/$p"
+          _mkpkg_prefix="runuser -u nobody --"
+        fi
+        # shellcheck disable=SC2086
+        if (cd "$_mkpkg_dir" && $_mkpkg_prefix makepkg --printsrcinfo >"/tmp/makepkg-$p.log" 2>&1); then
           ok "makepkg --printsrcinfo $p"
         else
           echo "--- makepkg --printsrcinfo $p failed, output: ---"
@@ -87,6 +99,7 @@ if command -v makepkg >/dev/null 2>&1; then
           echo "--- end makepkg output ---"
           bad "makepkg --printsrcinfo $p"
         fi
+        [[ -n ${_tmp:-} ]] && rm -rf "$_tmp"
   done
 else
   for p in xros-cli xros-installer xros-welcome xros-branding; do
