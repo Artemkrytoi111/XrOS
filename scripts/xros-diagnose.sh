@@ -79,7 +79,7 @@ fi
 # ---------------------------------------------------------------- 5. PKGBUILD
 if command -v makepkg >/dev/null 2>&1; then
   for p in xros-cli xros-installer xros-welcome xros-branding; do
-    if (cd "packages/$p" && makepkg --printsrcinfo >/dev/null 2>&1); then
+    if (cd "packages/$p" && makepkg --asroot --printsrcinfo >/dev/null 2>&1); then
       ok "makepkg --printsrcinfo $p"
     else
       bad "makepkg --printsrcinfo $p"
