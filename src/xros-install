@@ -33,7 +33,7 @@ BANNER=$(cat /usr/share/xros/banner.txt 2>/dev/null || echo "XrOS 1.0")
 
 say() { echo "[xros-install] $*" | tee -a "$LOG"; }
 
-dlg() { dialog --backtitle "$BACKTITLE" --title "$TITLE" --colors "$@" 2>&1 >/dev/tty; }
+dlg() { { dialog --backtitle "$BACKTITLE" --title "$TITLE" --colors "$@" > /dev/tty; } 2>&1; }
 
 NONINTERACTIVE="${XROS_NONINTERACTIVE:-}"
 
