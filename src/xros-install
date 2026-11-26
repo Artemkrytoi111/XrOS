@@ -985,7 +985,8 @@ if [[ -n "$NONINTERACTIVE" ]]; then
   CONF="${XROS_INSTALL_CONF:-/tmp/xros-install.conf}"
   [[ -f "$CONF" ]] || { say "ОШИБКА: нет файла настроек $CONF"; exit 1; }
   # shellcheck disable=SC1090
-  set -a; . "$CONF"; set +a
+# shellcheck source=/dev/null
+set -a; . "$CONF"; set +a
   rm -f "$CONF"
   : "${PARTMODE:=erase}"
   : "${FS:=ext4}"
