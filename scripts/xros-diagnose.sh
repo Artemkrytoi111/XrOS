@@ -843,6 +843,7 @@ if [[ $dup_const -eq 0 ]]; then ok "install.rs: pub const без дублей"; 
 # Время: тесты занимают ~70 с (child-process 28 с + extended 38 с).
 
 # 20а. Build environment: rootfs, маркеры init, builder, версии инструментов.
+if [[ -d build-env ]]; then
 if [[ -d build-env/root.x86_64/usr/bin ]]; then ok "build-env: rootfs существует"; else bad "build-env: нет rootfs (нужен scripts/xros-build-env.sh --init)"; fi
 if [[ -f build-env/state/init-done ]]; then ok "build-env: маркер state/init-done"; else bad "build-env: нет state/init-done"; fi
 if [[ -f build-env/state/deps-fetched ]]; then ok "build-env: маркер state/deps-fetched"; else bad "build-env: нет state/deps-fetched"; fi
@@ -862,6 +863,15 @@ if benv_ver=$(./scripts/xros-build-env.sh --exec -- bash -c 'rustc --version; ca
 else
   bad "build-env: --exec не работает (нельзя проверить версии инструментов)"
 fi
+else
+  skip "build-env: rootfs существует" "нет каталога build-env (локальный артефакт, не входит в git)"
+    skip "build-env: маркер state/init-done" "нет каталога build-env (локальный артефакт, не входит в git)"
+      skip "build-env: маркер state/deps-fetched" "нет каталога build-env (локальный артефакт, не входит в git)"
+        skip "build-env: builder uid 1000 в rootfs" "нет каталога build-env (локальный артефакт, не входит в git)"
+          skip "build-env: bootstrap-тарбол + подпись на месте" "нет каталога build-env (локальный артефакт, не входит в git)"
+            skip "build-env: rootfs >= 1 ГБ" "нет каталога build-env (локальный артефакт, не входит в git)"
+              skip "build-env: --exec не работает" "нет каталога build-env (локальный артефакт, не входит в git)"
+              fi
 
 # 20б. Независимость от чужих проектов: ссылки на другой проект
 # в скриптах сборки и в build-env (кроме самого rootfs).
