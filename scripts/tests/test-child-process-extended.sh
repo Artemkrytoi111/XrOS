@@ -223,8 +223,10 @@ sleep 0.3
 GRANDCHILD=$(ps -o pid= --ppid "$CHILD2" 2>/dev/null | tr -d ' ' | head -1)
 printf '%s %s %s %s\n' "$CHILD1" "$CHILD2" "${GRANDCHILD:-0}" "$WRITER" > "$CHILDRENFILE"
 echo ready > "$READYFILE"
-# Внешняя команда на переднем плане — как rsync в run_install.
-sleep "$FG_SLEEP"
+# Долгая внешняя команда — как rsync в run_install: в фоне + wait, чтобы
+# ловушка срабатывала сразу. На переднем плане bash 5.3 теряет отложенную
+# ловушку, если команду убивает тот же SIGTERM (e2/e3 в CI на Arch).
+sleep "$FG_SLEEP" & wait "$!"
 HARNESS_EOF
 chmod +x "$T/engine-harness2.sh"
 
