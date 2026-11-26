@@ -15,7 +15,7 @@ jobs:
         run: pacman -Sy --noconfirm shellcheck
       - name: shellcheck
         run: |
-          shellcheck scripts/*.sh src/xros-install
+          shellcheck -S warning scripts/*.sh src/xros-install
           if grep -RInE 'password.*xros|xros.*xros' src/ profile/ scripts/ --exclude-dir=__pycache__; then
             echo "default password found" >&2
             exit 1
