@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: pacman -Sy --noconfirm shellcheck
+      - name: shellcheck
+        run: |
+          shellcheck scripts/*.sh src/xros-install
+          if grep -RInE 'password.*xros|xros.*xros' src/ profile/ scripts/ --exclude-dir=__pycache__; then
+            echo "default password found" >&2
+            exit 1
+          fi
+
+  rust:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: pacman -Sy --noconfirm base-devel rust
+      - name: cargo check (xros-cli)
+        run: cargo check --manifest-path src/xros-cli/Cargo.toml
+      - name: cargo check (Rust GUI)
+        run: cargo check --manifest-path src/xros-install-gui-rs/Cargo.toml
+
+  python-bridge:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Python + pytest
+        run: pacman -Sy --noconfirm python python-pytest
+      - name: bridge security tests
+        working-directory: src/xros-installer-diamond
+        run: python3 -m pytest test_bridge_security.py -v
+
+  diagnose:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install diagnose deps
+        run: pacman -Sy --noconfirm base-devel python
+      - name: xros-diagnose
+        run: ./scripts/xros-diagnose.sh
