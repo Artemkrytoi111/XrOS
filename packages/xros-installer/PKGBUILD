@@ -1,3 +1,4 @@
+# shellcheck shell=bash disable=SC2034,SC2154
 # XrOS — пакет xros-installer: консольный и графический установщики.
 # Графический бинарь собран заранее из src/xros-install-gui-rs
 # (cargo build --release --offline в chroot сборки: кэш cargo с eframe
