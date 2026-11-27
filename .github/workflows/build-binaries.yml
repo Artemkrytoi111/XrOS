@@ -11,6 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     container: archlinux:latest
     steps:
+      - name: Install git before checkout
+        run: pacman -Sy --noconfirm git
+
       - name: Checkout
         uses: actions/checkout@v4
 
