@@ -29,6 +29,7 @@ jobs:
 
       - name: Stage xros-installer-diamond (required by prepare())
         run: |
+          rm -rf packages/xros-installer/xros-installer-diamond
           cp -a src/xros-installer-diamond packages/xros-installer/xros-installer-diamond
           rm -rf packages/xros-installer/xros-installer-diamond/__pycache__
 
