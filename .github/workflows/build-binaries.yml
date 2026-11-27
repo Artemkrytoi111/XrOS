@@ -64,8 +64,8 @@ jobs:
       - name: Repack packages as nobody (makepkg refuses root)
         run: |
           chown -R nobody:nobody packages/xros-cli packages/xros-installer
-          runuser -u nobody -- env HOME=/tmp bash -c "cd packages/xros-cli && makepkg -fc --noconfirm"
-          runuser -u nobody -- env HOME=/tmp bash -c "cd packages/xros-installer && makepkg -fc --noconfirm"
+          runuser -u nobody -- env HOME=/tmp bash -c "cd packages/xros-cli && makepkg -fc --noconfirm --nodeps"
+          runuser -u nobody -- env HOME=/tmp bash -c "cd packages/xros-installer && makepkg -fc --noconfirm --nodeps"
           ls -la packages/xros-cli/*.pkg.tar.zst packages/xros-installer/*.pkg.tar.zst
 
       - name: Verify sync and diagnose
