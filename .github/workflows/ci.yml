@@ -55,6 +55,10 @@ jobs:
           chmod -R g-w profile/airootfs
           chmod 750 profile/airootfs/root
       - name: Install diagnose deps
-        run: pacman -Sy --noconfirm base-devel python
+        run: pacman -Sy --noconfirm base-devel python shellcheck rust grub python-pillow
+      - name: Fetch Rust dependencies (diagnose runs cargo --offline)
+        run: |
+          cargo fetch --manifest-path src/xros-cli/Cargo.toml
+          cargo fetch --manifest-path src/xros-install-gui-rs/Cargo.toml
       - name: xros-diagnose
         run: ./scripts/xros-diagnose.sh
