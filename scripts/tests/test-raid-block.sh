@@ -98,7 +98,7 @@ blkid() {
   # R-18: настоящий blkid при ошибке доступа пишет в stderr
   # (проверено: 'blkid: error: ...: Permission denied', rc=2).
   [[ -n "$BLKID_STDERR" ]] && echo "$BLKID_STDERR" >&2
-  local d="${@: -1}" _type
+  local d="${*: -1}" _type
   _type="$(printf '%s\n' "$BLKID_TABLE" | awk -v dev="$d" '$1==dev {print $2; exit}')"
   if [[ -n "$_type" ]]; then printf '%s\n' "$_type"; return 0; fi
   return 2
