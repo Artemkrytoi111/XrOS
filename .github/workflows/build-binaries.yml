@@ -60,6 +60,22 @@ jobs:
           PYEOF
           (cd src/xros-install-gui-rs && sha256sum Cargo.toml Cargo.lock src/*.rs | sort -k2 | sha256sum | cut -d' ' -f1) > packages/xros-installer/xros-install-gui.sha256
           cat packages/xros-installer/xros-install-gui.sha256
+          python3 - <<'PYEOF'
+          import hashlib
+          p = 'packages/xros-installer/PKGBUILD'
+          s = open(p).read()
+          new_sha = hashlib.sha256(open('packages/xros-installer/xros-install-gui', 'rb').read()).hexdigest()
+          start = s.index("sha256sums=(")
+          q1 = s.index("'", start)
+          q2 = s.index("'", q1 + 1)
+          q3 = s.index("'", q2 + 1)
+          q4 = s.index("'", q3 + 1)
+          old_sha = s[q3 + 1:q4]
+          assert len(old_sha) == 64, old_sha
+          s2 = s[:q3 + 1] + new_sha + s[q4:]
+          open(p, 'w').write(s2)
+          print("installer PKGBUILD sha256sums[1]:", old_sha, "->", new_sha)
+          PYEOF
 
       - name: Repack packages as nobody (makepkg refuses root)
         run: |
@@ -79,7 +95,7 @@ jobs:
         run: |
           git status --porcelain
           git add -f packages/xros-cli/xros packages/xros-cli/PKGBUILD packages/xros-cli/*.pkg.tar.zst
-          git add -f packages/xros-installer/xros-install-gui packages/xros-installer/xros-install-gui.sha256 packages/xros-installer/*.pkg.tar.zst
+          git add -f packages/xros-installer/xros-install-gui packages/xros-installer/xros-install-gui.sha256 packages/xros-installer/PKGBUILD packages/xros-installer/*.pkg.tar.zst
           git add -f packages/xros-installer/xros-installer-diamond
           git add -f profile/airootfs/usr/local/bin/xros profile/airootfs/usr/local/bin/xros-install-gui
           if git diff --cached --quiet; then
