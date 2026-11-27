@@ -288,19 +288,19 @@ else
     # Отдельный target-каталог target-r11-dev-iso — повреждённый target/
     # (objcopy-инцидент R-20 E) не используется. No-stage режим: сборка
     # только проверяет, что код компилируется офлайн; официальные
-    # GUI (cf3cdd2e…, 1.1, 14.11.2026) и CLI (9c67cfdc…) уже восстановлены
+    # GUI (ddf150a7…, пересобран 27.11.2026) и CLI (d802dd34…) уже восстановлены
     # из проверенных источников и НЕ перезаписываются. После сборки —
     # fail-closed SHA-гейты: staging обязан содержать официальные бинари.
     XROS_CARGO_TARGET_DIR="target-r11-dev-iso" XROS_BUILD_NO_STAGE=1 \
         "$BUILD_ENV" --build-rust --offline \
         || die "сборка Rust --offline не удалась (если кэш пуст — сначала онлайн: $BUILD_ENV --build-rust)"
     GUI_SHA="$(sha256sum "$ROOT/packages/xros-installer/xros-install-gui" | cut -d' ' -f1)"
-    [[ "$GUI_SHA" == "cf3cdd2e729580b318b6e0a6511f5eb700e76395dcf7aa073315de140545cb8c" ]] \
-        || die "RECOVERY-01: GUI в staging изменён после Rust-сборки ($GUI_SHA) — ожидается официальный 1.1 cf3cdd2e…"
+    [[ "$GUI_SHA" == "ddf150a7ffba2c0da851b12b536de9265a652879980b9007840d5cd860669d4a" ]] \
+        || die "RECOVERY-01: GUI в staging изменён после Rust-сборки ($GUI_SHA) — ожидается ddf150a7… (пересобран 27.11.2026)"
     CLI_SHA="$(sha256sum "$ROOT/packages/xros-cli/xros" | cut -d' ' -f1)"
-    [[ "$CLI_SHA" == "9c67cfdcc1b50998e05be1d0c9efd6d1325473731b8b7de6971ebe049954e1aa" ]] \
-        || die "RECOVERY-01: CLI в staging изменён после Rust-сборки ($CLI_SHA) — ожидается 9c67cfdc…"
-    echo "RECOVERY-01: staging после Rust-сборки — GUI cf3cdd2e… ✓, CLI 9c67cfdc… ✓ (официальные, не перезаписаны)"
+    [[ "$CLI_SHA" == "d802dd3435aeef4685c6cd0de2f2682a13d22cf2a1f5805a6d4deca28c505857" ]] \
+        || die "RECOVERY-01: CLI в staging изменён после Rust-сборки ($CLI_SHA) — ожидается d802dd34… (пересобран 27.11.2026)"
+    echo "RECOVERY-01: staging после Rust-сборки — GUI ddf150a7… ✓, CLI d802dd34… ✓ (пересобраны 27.11.2026)"
 fi
 
 # --- шаг 5: стейджинг исходников в packages/ ------------------------------------
