@@ -159,7 +159,7 @@ say() { echo "SAY: $*" >> "$T/say.log"; }
 FSTYPE_MAP=""; TYPE_MAP=""; BLKID_MAP=""; PATH_MAP=""
 LSBLK_FAIL_DEV=""; BLKID_FAIL_DEV=""; LSBLK_PATH_FAIL=""; HEAD_FAIL_DEV=""
 lsblk() {
-  local d="${@: -1}"
+  local d="${*: -1}"
   case "$*" in
     *"-o NAME,SIZE,TYPE,FSTYPE"*) printf '' ;;
     *"-o FSTYPE"*)
@@ -177,7 +177,7 @@ lsblk() {
   return 0
 }
 blkid() {
-  local d="${@: -1}" _type
+  local d="${*: -1}" _type
   [[ "$d" == "$BLKID_FAIL_DEV" ]] && return 1
   _type="$(printf '%s\n' "$BLKID_MAP" | awk -v dev="$d" '$1==dev {print $2; exit}')"
   if [[ -n "$_type" ]]; then printf '%s\n' "$_type"; return 0; fi
@@ -185,7 +185,7 @@ blkid() {
 }
 # head: настоящий, кроме устройств из HEAD_FAIL_DEV (ошибка чтения).
 head() {
-  local d="${@: -1}"
+  local d="${*: -1}"
   if [[ -n "$HEAD_FAIL_DEV" && "$d" == "$HEAD_FAIL_DEV" ]]; then return 1; fi
   command head "$@"
 }
