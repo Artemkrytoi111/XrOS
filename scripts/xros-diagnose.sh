@@ -1162,7 +1162,7 @@ if command -v bsdtar >/dev/null 2>&1; then
     # (xros-cli-1.0-1/1.0-3 вместо свежего 1.0-2).
     _ver="$(grep -m1 '^pkgver=' "packages/$_pkg/PKGBUILD" | cut -d= -f2)"
     _rel="$(grep -m1 '^pkgrel=' "packages/$_pkg/PKGBUILD" | cut -d= -f2)"
-    _pkgfile="$(ls "packages/$_pkg/"$_pkg-${_ver}-${_rel}"-*.pkg.tar.zst 2>/dev/null | head -1)"
+    _pkgfile="$(ls "packages/$_pkg"/"$_pkg-${_ver}-${_rel}"-*.pkg.tar.zst 2>/dev/null | head -1)"
     if [[ -z "$_pkgfile" ]]; then
       bad "A-05: нет пакета $_pkg для сверки"
       continue
