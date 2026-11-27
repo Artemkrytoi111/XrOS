@@ -779,7 +779,7 @@ if [[ $ph_bad -eq 0 ]]; then ok "xros.example везде с PLACEHOLDER рядо
 # намеренно завершается exit 3) и TODO в mkinitcpio.conf.d/archiso.conf
 # (сверить с пакетом mkinitcpio-archiso) — оба задокументированы,
 # но пока не закрыты, поэтому проверка даёт FAIL, а не SKIP.
-if grep -rniE --exclude-dir=.git --exclude=xros-diagnose.sh 'TODO|FIXME|not implemented|unimplemented' src scripts packages profile 2>/dev/null | grep .; then
+if grep -rniE --exclude-dir=.git --exclude-dir=target --exclude=xros-diagnose.sh 'TODO|FIXME|not implemented|unimplemented' src scripts packages profile 2>/dev/null | grep .; then
   bad "маркеры-заглушки TODO/FIXME/not implemented (см. список выше)"
 else
   ok "маркеров-заглушек нет"
