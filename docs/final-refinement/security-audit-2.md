@@ -12,7 +12,7 @@ test-de-none.sh 67/0).
 | # | Проблема | Проверка (2026-11-27) | Статус |
 |---|---|---|---|
 | 1 | PKGBUILD `sha256sums=('SKIP')` | Все 5 PKGBUILD имеют реальные SHA-256: `xros-installer` — `acc840dd…`, `xros-cli` — `9c67cfdc…`, `xros-welcome` — `3143e22c…`, `xros-branding` — `2a4730d0…`, `xros-keyring` — `3ffb45e5…` | держится |
-| 2 | TOCTOU в `bridge.py:_secure_create` | `src/xros-installer-diamond/bridge.py:123–151`: `O_CREAT|O_EXCL`, `0o600`; используется при создании конфига (371) и лога (389) | держится |
+| 2 | TOCTOU в `bridge.py:_secure_create` | `src/xros-installer-diamond/bridge.py:123–151`: `O_CREAT\|O_EXCL`, `0o600`; используется при создании конфига (371) и лога (389) | держится |
 | 3 | Инъекция `\n` в конфиг | `bridge.py:writeConf` (338): белый список ключей, отказ при `\n`/`\r`, `_shell_quote`; `install.rs:validate_conf_value` (137): отказ при `\n`/`\r`; есть unit-тесты (361, 371) | держится |
 | 4 | Широкие права sudo | `profile/airootfs/root/customize_airootfs.sh:63`: `xros ALL=(root) NOPASSWD: /usr/local/bin/xros-install`, `chmod 440`; движок удаляет `live-xros` при установке (1607, 1984–1985); `%wheel` — только с паролем (1686) | держится |
 | 5 | Автообновление без проверки подписей | `profile/airootfs/usr/local/bin/xros-auto-update:107–110`: fail-closed проверка `SigLevel = Required` для `[xros]` перед запуском | держится |
