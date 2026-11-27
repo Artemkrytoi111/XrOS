@@ -24,7 +24,7 @@ options=('!debug' '!strip')
 source=('xros-install'
         'xros-install-gui')
 sha256sums=('acc840dd8e127b6ff0ba79e1ea3d65461269fdb03d1f8164965719b175f56cef'
-            'cf3cdd2e729580b318b6e0a6511f5eb700e76395dcf7aa073315de140545cb8c')
+            'ddf150a7ffba2c0da851b12b536de9265a652879980b9007840d5cd860669d4a')
 # Diamond (каталог, НЕ в source=): makepkg не умеет каталог как источник
 # («not found in the build directory») — staged-каталог лежит рядом
 # с PKGBUILD, prepare()/package() обращаются к нему через $startdir.

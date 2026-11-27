@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# XrOS 1.0 Diamond — launcher графического установщика (PyQt6 + QML).
+# Приложение лежит в /usr/local/lib/xros-installer-diamond/.
+set -u
+APP_DIR="/usr/local/lib/xros-installer-diamond"
+[[ -f "$APP_DIR/main.py" ]] || { echo "XrOS 1.0 Diamond: не найден $APP_DIR/main.py" >&2; exit 1; }
+exec python3 "$APP_DIR/main.py" "$@"
