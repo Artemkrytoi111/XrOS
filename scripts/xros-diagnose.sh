@@ -1132,16 +1132,18 @@ gui_sha=$(sha256sum packages/xros-installer/xros-install-gui 2>/dev/null | cut -
 # (короткий пароль, vsync, убрана боковая панель) — sha256 обновлён
 # с 6321b5a2… (R-08) на cf3cdd2e… (официальный 1.1: cargo check/test/
 # clippy чисты, .symtab на месте, не stripped, RAID-фрагмент на месте).
-if [[ "$gui_sha" == "cf3cdd2e729580b318b6e0a6511f5eb700e76395dcf7aa073315de140545cb8c" ]]; then
-  ok "xros-install-gui (пакет): sha256 cf3cdd2e… (1.1, 14.11.2026)"
+# 27.11.2026: бинарь пересобран (a763a97) — sha256 обновлён
+# с cf3cdd2e… (1.1) на ddf150a7… (пересборка 27.11.2026).
+if [[ "$gui_sha" == "ddf150a7ffba2c0da851b12b536de9265a652879980b9007840d5cd860669d4a" ]]; then
+  ok "xros-install-gui (пакет): sha256 ddf150a7… (пересобран 27.11.2026)"
 else
-  bad "xros-install-gui (пакет): sha256 не совпадает с зафиксированным cf3cdd2e… (1.1)"
+  bad "xros-install-gui (пакет): sha256 не совпадает с зафиксированным ddf150a7… (пересобран 27.11.2026)"
 fi
 cli_sha=$(sha256sum packages/xros-cli/xros 2>/dev/null | cut -d' ' -f1)
-if [[ "$cli_sha" == "9c67cfdcc1b50998e05be1d0c9efd6d1325473731b8b7de6971ebe049954e1aa" ]]; then
-  ok "xros (CLI, пакет): sha256 9c67cfdc… (зафиксирован 10.11.2026)"
+if [[ "$cli_sha" == "d802dd3435aeef4685c6cd0de2f2682a13d22cf2a1f5805a6d4deca28c505857" ]]; then
+  ok "xros (CLI, пакет): sha256 d802dd34… (пересобран 27.11.2026)"
 else
-  bad "xros (CLI, пакет): sha256 не совпадает с зафиксированным 9c67cfdc…"
+  bad "xros (CLI, пакет): sha256 не совпадает с зафиксированным d802dd34…"
 fi
 
 # ---------------------------------------------------------------- 20м. Сверка staged-бинарей с содержимым пакетов (A-05)
@@ -1155,7 +1157,12 @@ fi
 if command -v bsdtar >/dev/null 2>&1; then
   for spec in "xros-cli xros usr/local/bin/xros" "xros-installer xros-install-gui usr/local/bin/xros-install-gui"; do
     read -r _pkg _bin _path <<< "$spec"
-    _pkgfile="$(ls -t "packages/$_pkg"/"$_pkg"-*.pkg.tar.zst 2>/dev/null | head -1)"
+    # Выбор пакета — по версии из PKGBUILD, а не по дате: в git-чекауте
+    # увсех файлов одна дата клона, и ls -t брал случайный пакет
+    # (xros-cli-1.0-1/1.0-3 вместо свежего 1.0-2).
+    _ver="$(grep -m1 '^pkgver=' "packages/$_pkg/PKGBUILD" | cut -d= -f2)"
+    _rel="$(grep -m1 '^pkgrel=' "packages/$_pkg/PKGBUILD" | cut -d= -f2)"
+    _pkgfile="$(ls "packages/$_pkg/"$_pkg-${_ver}-${_rel}"-*.pkg.tar.zst 2>/dev/null | head -1)"
     if [[ -z "$_pkgfile" ]]; then
       bad "A-05: нет пакета $_pkg для сверки"
       continue
