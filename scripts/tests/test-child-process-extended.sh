@@ -53,8 +53,6 @@ ok()   { PASS=$((PASS+1)); echo "PASS: $1"; }
 bad()  { FAIL=$((FAIL+1)); FAILED_NAMES="$FAILED_NAMES $1"; echo "FAIL: $1"; }
 skip() { SKIPN=$((SKIPN+1)); echo "SKIP: $1"; }
 # Пробы окружения: E6/E8/E9 нужен unshare -rm, проверка зомби — systemd как PID 1.
-CAN_UNSHARE=0
-if unshare -rm true 2>/dev/null; then CAN_UNSHARE=1; fi
 IS_SYSTEMD_PID1=0
 [[ "$(cat /proc/1/comm 2>/dev/null)" == "systemd" ]] && IS_SYSTEMD_PID1=1
 
