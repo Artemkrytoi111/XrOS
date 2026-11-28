@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-dev_1.1beta-8B00FF" alt="Version dev 1.1beta">
+  <img src="https://img.shields.io/badge/version-dev_1.2beta-8B00FF" alt="Version dev 1.2beta">
   <img src="https://img.shields.io/badge/based_on-Arch_Linux-1793D1?logo=archlinux&logoColor=white" alt="Based on Arch Linux">
   <img src="https://img.shields.io/badge/license-GPLv3-blue.svg" alt="License: GPLv3">
   <a href="https://artemkrytoi111.github.io/XrOS/"><img src="https://img.shields.io/badge/website-artemkrytoi111.github.io%2FXrOS-8B00FF" alt="Website"></a>
@@ -22,7 +22,7 @@
 
 XrOS — настольный дистрибутив на базе Arch Linux. Живая система с KDE Plasma, графический установщик Diamond с собственным дизайном, тема GRUB Sapphire, экран завершения с безопасной перезагрузкой, диагностика и автотесты. Обновления — из подписанного репозитория `[xros]` с проверкой подписей GPG.
 
-Текущая версия в разработке — **1.1beta** (dev); последний собранный образ — 1.0 Diamond (DEV ISO 14.11.2026).
+Текущая версия в разработке — **1.2beta** (dev); последний собранный образ — 1.0 Diamond (DEV ISO 14.11.2026).
 
 Оформление: чёрный металлический X с фиолетовым неоном, акцент `#8B00FF`, второй акцент `#B66AFF`, фон `#08080D` / `#111018`.
 
@@ -32,7 +32,7 @@ XrOS — настольный дистрибутив на базе Arch Linux. �
 - **Графический установщик** — собственный дизайн, разметка диска, пользователи, LUKS как опция
 - **Подписанные пакеты** — `SigLevel = Required`, подписи GPG для пакетов, баз репозитория и манифеста исходников
 - **Автообновления** — репозиторий `[xros]`, таймер обновлений, переходный пакет `xros-keyring`
-- **Диагностика и тесты** — `./scripts/xros-diagnose.sh` (PASS=307 FAIL=0 SKIP=18), полный набор тестов 919/0/7
+- **Диагностика и тесты** — `./scripts/xros-diagnose.sh` (PASS=309 FAIL=0 SKIP=14)
 - **Свой build-env** — изолированная среда сборки на базе Arch
 
 ## Загрузка
