@@ -1169,7 +1169,13 @@ fi
 if command -v bsdtar >/dev/null 2>&1; then
   for spec in "xros-cli xros usr/local/bin/xros" "xros-installer xros-install-gui usr/local/bin/xros-install-gui"; do
     read -r _pkg _bin _path <<< "$spec"
-    _pkgfile="$(ls -t "packages/$_pkg"/"$_pkg"-*.pkg.tar.zst 2>/dev/null | head -1)"
+    # Пакет — строго по pkgver/pkgrel из PKGBUILD, а не newest по mtime:
+    # ls -t зависит от порядка checkout и брал устаревшие пакеты
+    # (CI #70: в git лежали xros-cli 1.0-1/1.0-2/1.0-3, взят 1.0-3
+    # со старым бинарём вместо свежего 1.0-2).
+    _ver="$(grep -E '^pkgver=' "packages/$_pkg/PKGBUILD" 2>/dev/null | cut -d= -f2)"
+    _rel="$(grep -E '^pkgrel=' "packages/$_pkg/PKGBUILD" 2>/dev/null | cut -d= -f2)"
+    _pkgfile="$(ls "packages/$_pkg"/"$_pkg-${_ver}-${_rel}-"*.pkg.tar.zst 2>/dev/null | head -1)"
     if [[ -z "$_pkgfile" ]]; then
       bad "A-05: нет пакета $_pkg для сверки"
       continue
