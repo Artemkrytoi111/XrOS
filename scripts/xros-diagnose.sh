@@ -85,9 +85,24 @@ fi
 # ---------------------------------------------------------------- 5. PKGBUILD
 if command -v makepkg >/dev/null 2>&1; then
   for p in xros-cli xros-installer xros-welcome xros-branding; do
-    if (cd "packages/$p" && makepkg --printsrcinfo >/dev/null 2>&1); then
+    _mkpkg_dir="packages/$p"
+    _mkpkg_prefix=""
+    if [[ $EUID -eq 0 ]]; then
+      # makepkg has no --asroot since 2015 and refuses to run as root:
+      # run it as nobody in a throwaway copy of the package dir
+      _tmp="$(mktemp -d)"
+      cp -r "packages/$p" "$_tmp/$p"
+      chmod -R a+rwX "$_tmp"
+      _mkpkg_dir="$_tmp/$p"
+      _mkpkg_prefix="runuser -u nobody --"
+    fi
+    # shellcheck disable=SC2086
+    if (cd "$_mkpkg_dir" && $_mkpkg_prefix makepkg --printsrcinfo >"/tmp/makepkg-$p.log" 2>&1); then
       ok "makepkg --printsrcinfo $p"
     else
+      echo "--- makepkg --printsrcinfo $p failed, output: ---"
+      cat "/tmp/makepkg-$p.log" 2>/dev/null || true
+      echo "--- end makepkg output ---"
       bad "makepkg --printsrcinfo $p"
     fi
   done
@@ -853,10 +868,10 @@ if [[ $dup_const -eq 0 ]]; then ok "install.rs: pub const без дублей"; 
 # Время: тесты занимают ~70 с (child-process 28 с + extended 38 с).
 
 # 20а. Build environment: rootfs, маркеры init, builder, версии инструментов.
-if [[ -d build-env/root.x86_64/usr/bin ]]; then ok "build-env: rootfs существует"; else bad "build-env: нет rootfs (нужен scripts/xros-build-env.sh --init)"; fi
-if [[ "$POSIX_CHECKS" -eq 0 ]]; then
-  skip "build-env: состояние rootfs, маркеры, builder и версии" "checkout на $ROOT_FS_TYPE не поддерживает надёжный chroot/mode check"
-else
+# build-env — локальный артефакт, не входит в git: в свежем checkout
+# (в т.ч. в CI) каталога нет, и все 7 проверок — SKIP, а не FAIL.
+if [[ -d build-env ]]; then
+  if [[ -d build-env/root.x86_64/usr/bin ]]; then ok "build-env: rootfs существует"; else bad "build-env: нет rootfs (нужен scripts/xros-build-env.sh --init)"; fi
   if [[ -f build-env/state/init-done ]]; then ok "build-env: маркер state/init-done"; else bad "build-env: нет state/init-done"; fi
   if [[ -f build-env/state/deps-fetched ]]; then ok "build-env: маркер state/deps-fetched"; else bad "build-env: нет state/deps-fetched"; fi
   if grep -q '^builder:x:1000:1000:' build-env/root.x86_64/etc/passwd 2>/dev/null; then ok "build-env: builder uid 1000 в rootfs"; else bad "build-env: нет builder uid 1000"; fi
@@ -875,6 +890,14 @@ else
   else
     bad "build-env: --exec не работает (нельзя проверить версии инструментов)"
   fi
+else
+  skip "build-env: rootfs существует" "нет каталога build-env (локальный артефакт, не входит в git)"
+  skip "build-env: маркер state/init-done" "нет каталога build-env (локальный артефакт, не входит в git)"
+  skip "build-env: маркер state/deps-fetched" "нет каталога build-env (локальный артефакт, не входит в git)"
+  skip "build-env: builder uid 1000 в rootfs" "нет каталога build-env (локальный артефакт, не входит в git)"
+  skip "build-env: bootstrap-тарбол + подпись на месте" "нет каталога build-env (локальный артефакт, не входит в git)"
+  skip "build-env: rootfs >= 1 ГБ" "нет каталога build-env (локальный артефакт, не входит в git)"
+  skip "build-env: --exec не работает" "нет каталога build-env (локальный артефакт, не входит в git)"
 fi
 
 # 20б. Независимость от чужих проектов: ссылки на другой проект
