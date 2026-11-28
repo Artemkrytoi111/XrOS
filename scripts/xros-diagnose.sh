@@ -1143,16 +1143,19 @@ gui_sha=$(sha256sum packages/xros-installer/xros-install-gui 2>/dev/null | cut -
 # (короткий пароль, vsync, убрана боковая панель) — sha256 обновлён
 # с 6321b5a2… (R-08) на cf3cdd2e… (официальный 1.1: cargo check/test/
 # clippy чисты, .symtab на месте, не stripped, RAID-фрагмент на месте).
-if [[ "$gui_sha" == "213928d065eb6901c34c8ca692f82d858768dc4e5bcf107d48e430c037c83025" ]]; then
-  ok "xros-install-gui (пакет): sha256 213928d0… (пересобран из актуальных исходников)"
+# 28.11.2026: пересборка build-binaries #11 — с 213928d0… (зафиксирован
+# в c24ae69, бинарь в пакете отсутствовал) на 96df68ea…; CLI с 9c67cfdc…
+# (10.11.2026) на 66ea4b96… (новый тулчейн в контейнере сборки).
+if [[ "$gui_sha" == "96df68ea45f1a6f420735f562e9ff73492c8ad5def5e13704b7b0cbb914a4106" ]]; then
+  ok "xros-install-gui (пакет): sha256 96df68ea… (пересобран из актуальных исходников)"
 else
-  bad "xros-install-gui (пакет): sha256 не совпадает с зафиксированным 213928d0…"
+  bad "xros-install-gui (пакет): sha256 не совпадает с зафиксированным 96df68ea…"
 fi
 cli_sha=$(sha256sum packages/xros-cli/xros 2>/dev/null | cut -d' ' -f1)
-if [[ "$cli_sha" == "9c67cfdcc1b50998e05be1d0c9efd6d1325473731b8b7de6971ebe049954e1aa" ]]; then
-  ok "xros (CLI, пакет): sha256 9c67cfdc… (зафиксирован 10.11.2026)"
+if [[ "$cli_sha" == "66ea4b964df6245b745ac95d8e10c8a98bde2ea8d18b6f50dfc052ec5c7aa9ae" ]]; then
+  ok "xros (CLI, пакет): sha256 66ea4b96… (зафиксирован 28.11.2026)"
 else
-  bad "xros (CLI, пакет): sha256 не совпадает с зафиксированным 9c67cfdc…"
+  bad "xros (CLI, пакет): sha256 не совпадает с зафиксированным 66ea4b96…"
 fi
 
 # ---------------------------------------------------------------- 20м. Сверка staged-бинарей с содержимым пакетов (A-05)

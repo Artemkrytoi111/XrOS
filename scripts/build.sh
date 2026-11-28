@@ -288,19 +288,19 @@ else
     # Отдельный target-каталог target-r11-dev-iso — повреждённый target/
     # (objcopy-инцидент R-20 E) не используется. No-stage режим: сборка
     # только проверяет, что код компилируется офлайн; официальные
-    # GUI (cf3cdd2e…, 1.1, 14.11.2026) и CLI (9c67cfdc…) уже восстановлены
+    # GUI (96df68ea…, пересобран 28.11.2026) и CLI (66ea4b96…) уже восстановлены
     # из проверенных источников и НЕ перезаписываются. После сборки —
     # fail-closed SHA-гейты: staging обязан содержать официальные бинари.
     XROS_CARGO_TARGET_DIR="target-r11-dev-iso" XROS_BUILD_NO_STAGE=1 \
         "$BUILD_ENV" --build-rust --offline \
         || die "сборка Rust --offline не удалась (если кэш пуст — сначала онлайн: $BUILD_ENV --build-rust)"
     GUI_SHA="$(sha256sum "$ROOT/packages/xros-installer/xros-install-gui" | cut -d' ' -f1)"
-    [[ "$GUI_SHA" == "cf3cdd2e729580b318b6e0a6511f5eb700e76395dcf7aa073315de140545cb8c" ]] \
-        || die "RECOVERY-01: GUI в staging изменён после Rust-сборки ($GUI_SHA) — ожидается официальный 1.1 cf3cdd2e…"
+    [[ "$GUI_SHA" == "96df68ea45f1a6f420735f562e9ff73492c8ad5def5e13704b7b0cbb914a4106" ]] \
+        || die "RECOVERY-01: GUI в staging изменён после Rust-сборки ($GUI_SHA) — ожидается 96df68ea…"
     CLI_SHA="$(sha256sum "$ROOT/packages/xros-cli/xros" | cut -d' ' -f1)"
-    [[ "$CLI_SHA" == "9c67cfdcc1b50998e05be1d0c9efd6d1325473731b8b7de6971ebe049954e1aa" ]] \
-        || die "RECOVERY-01: CLI в staging изменён после Rust-сборки ($CLI_SHA) — ожидается 9c67cfdc…"
-    echo "RECOVERY-01: staging после Rust-сборки — GUI cf3cdd2e… ✓, CLI 9c67cfdc… ✓ (официальные, не перезаписаны)"
+    [[ "$CLI_SHA" == "66ea4b964df6245b745ac95d8e10c8a98bde2ea8d18b6f50dfc052ec5c7aa9ae" ]] \
+        || die "RECOVERY-01: CLI в staging изменён после Rust-сборки ($CLI_SHA) — ожидается 66ea4b96…"
+    echo "RECOVERY-01: staging после Rust-сборки — GUI 96df68ea… ✓, CLI 66ea4b96… ✓ (официальные, не перезаписаны)"
 fi
 
 # --- шаг 5: стейджинг исходников в packages/ ------------------------------------
