@@ -45,17 +45,17 @@
       </div>
 
       <h3>Ротация ключа</h3>
-      <p>Идёт переход на новый production-ключ подписи:</p>
+      <p>Production-ключ подписи XrOS разделён на офлайн-master и отдельный online signing subkey. Оба ключа бессрочные.</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Ключ</th><th>Отпечаток</th><th>Статус</th></tr></thead>
           <tbody>
-            <tr><td>Старый production-ключ</td><td><code>B16629E8B17270764AED33013D1718A6EE45C94C</code></td><td>Ed25519, заменяется</td></tr>
-            <tr><td>Новый production-ключ</td><td><code>9E71EDB1A341779B7F0B99EAD1A3963AA4E45CEB</code></td><td>Действующий, переходный период</td></tr>
+            <tr><td>Offline master key</td><td><code>52F963537CCD76C941B4DFD7B0DD24EE45116C8A</code></td><td>Ed25519, бессрочный, хранится офлайн</td></tr>
+            <tr><td>Online signing subkey</td><td><code>6393D0F558DE9B9E1205D25C79AEF5480EF045B5</code></td><td>Ed25519, бессрочный, используется для подписей</td></tr>
           </tbody>
         </table>
       </div>
-      <p>Переходный пакет <code>xros-keyring</code> доставляет новый ключ в систему. Переходный период — минимум 4 недели, до <strong>13 декабря 2026 года</strong>. В течение этого времени действуют оба ключа.</p>
+      <p>Пакет <code>xros-keyring</code> доставляет публичный production-ключ в систему. Приватный offline-master не покидает защищённое хранилище; online-подписывающая часть используется только в отдельном keyring.</p>
 
       <h3>Что никогда не публикуется</h3>
       <div class="note"><strong>Приватный ключ подписи никогда не публикуется.</strong> Он хранится только офлайн у владельца проекта и никогда не попадает в репозиторий, в ISO, в среду сборки или на GitHub. Публикуется только открытый ключ. Если кто-то предлагает вам «приватный ключ XrOS» — это подделка.</div>

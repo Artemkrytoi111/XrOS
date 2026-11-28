@@ -4,7 +4,8 @@
 # Что проверяется (БЕЗ реального форматирования диска — TARGET здесь
 # обычный каталог, а umount/sync подменены заглушками через PATH):
 #  T0  статика: в install.rs есть PDEATHSIG/pre_exec/setsid/getppid,
-#      в src/xros-install есть trap HUP/TERM/INT + cleanup + сторож.
+#      в src/xros-install есть trap HUP/TERM/INT + cleanup + сторож,
+#      launcher/sudoers разрешают только fixed root-owned entry point.
 #  T1  падение родителя: python-симулятор родителя делает ровно то же,
 #      что pre_exec в install.rs (prctl PDEATHSIG, проверка getppid,
 #      setsid), затем умирает через os._exit(1) без всякой очистки.
@@ -29,6 +30,8 @@ set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ENGINE="$ROOT/src/xros-install"
 GUI_INSTALL="$ROOT/src/xros-install-gui-rs/src/install.rs"
+LAUNCHER="$ROOT/profile/airootfs/usr/local/bin/xros-installer-launcher"
+CUSTOMIZE="$ROOT/profile/airootfs/root/customize_airootfs.sh"
 
 PASS=0
 FAIL=0
@@ -105,6 +108,17 @@ grep -q "PR_SET_PDEATHSIG" "$GUI_INSTALL" \
   && grep -q "getppid" "$GUI_INSTALL" \
   && ok "T0a install.rs: PDEATHSIG + pre_exec + setsid + getppid" \
   || bad "T0a install.rs: PDEATHSIG + pre_exec + setsid + getppid"
+if [[ -f "$LAUNCHER" ]] \
+  && grep -Fq 'case "${1:-}" in' "$LAUNCHER" \
+  && grep -Fq 'diamond)' "$LAUNCHER" \
+   && grep -Fq 'rust)' "$LAUNCHER" \
+  && grep -Fq 'xros-installer-launcher' "$CUSTOMIZE" \
+  && grep -Fq 'NOPASSWD: /usr/local/bin/xros-installer-launcher' "$CUSTOMIZE" \
+  && ! grep -Fq 'NOPASSWD: /usr/local/bin/xros-installer-diamond' "$CUSTOMIZE"; then
+  ok "T0a2: fixed launcher и sudoers policy"
+else
+  bad "T0a2: fixed launcher и sudoers policy"
+fi
 grep -q "InstallHandle" "$GUI_INSTALL" \
   && grep -q "kill(-self.pgid" "$GUI_INSTALL" \
   && grep -q "SIGKILL" "$GUI_INSTALL" \

@@ -21,13 +21,22 @@ Item {
     property string fs: "ext4"
     property bool confirmed: false
 
-    function validate() {
+    function hasPart(parts, path) {
+        return path !== "" && parts.some(function(p) { return p.path === path && !p.blocked })
+    }
+
+    function confirmAvailable() {
         if (!selectedDisk || selectedDisk.isIsoDisk || selectedDisk.blocked) return false
         if (partMode === "manual") {
-            if (selectedPart === "") return false
-            if (bridge.isUefi() && selectedEfi === "") return false
+            if (!hasPart(manualParts(), selectedPart)) return false
+            if (bridge.isUefi() && !hasPart(efiParts(), selectedEfi)) return false
+            if (bridge.isUefi() && selectedPart === selectedEfi) return false
         }
-        return confirmed
+        return true
+    }
+
+    function validate() {
+        return confirmAvailable() && confirmed
     }
 
     // Ручной режим: разделы-кандидаты (без LVM/LUKS/RAID, A-24).
@@ -311,7 +320,7 @@ Item {
                     text: confirmed
                           ? (installer.uiLang === "en" ? "Confirmed ✓" : "Подтверждено ✓")
                           : (installer.uiLang === "en" ? "Confirm disk choice…" : "Подтвердить выбор диска…")
-                    enabled: selectedDisk && !selectedDisk.isIsoDisk && (partMode === "erase" || selectedPart !== "")
+                    enabled: confirmAvailable()
                     onClicked: openConfirm()
                     Layout.preferredHeight: 40
                     background: Rectangle {

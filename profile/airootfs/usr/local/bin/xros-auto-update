@@ -151,7 +151,7 @@ main() {
   # post_install, восстанавливая доверие. Если ключ уже доверен —
   # переход выполнен, пакет не нужен (даже если он не установлен:
   # ключ мог быть импортирован вручную).
-  local new_fpr="9E71EDB1A341779B7F0B99EAD1A3963AA4E45CEB"
+  local new_fpr="52F963537CCD76C941B4DFD7B0DD24EE45116C8A"
   local key_trusted=0
   if pacman-key --list-keys "$new_fpr" 2>/dev/null | grep -q "\[ *full *\]"; then
     key_trusted=1

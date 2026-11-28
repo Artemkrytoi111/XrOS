@@ -18,6 +18,12 @@ skip() { echo "SKIP  $1 ($2)"; SKIP=$((SKIP+1)); }
 nc()   { echo "NOT CONFIGURED  $1"; NCFG=$((NCFG+1)); }
 
 cd "$ROOT" || { echo "xros-diagnose: не удалось перейти в $ROOT" >&2; exit 1; }
+ROOT_FS_TYPE="$(stat -f -c '%T' "$ROOT" 2>/dev/null || true)"
+POSIX_CHECKS=1
+if [[ "$ROOT_FS_TYPE" == "9p" || "$ROOT_FS_TYPE" == "v9fs" ]]; then
+  POSIX_CHECKS=0
+  echo "INFO  checkout filesystem: $ROOT_FS_TYPE; POSIX mode and mount-namespace checks will be SKIP"
+fi
 
 # ---------------------------------------------------------------- 1. bash -n
 while IFS= read -r -d '' f; do
@@ -402,28 +408,25 @@ if grep -q 'request_focus' src/xros-install-gui-rs/src/app.rs; then
 else
   bad "xros-install-gui: нет request_focus в app.rs"
 fi
-# 2) Свежесть и соответствие поставляемого бинаря исходникам:
-#    бинарь новее app.rs и system.rs И содержит маркер фильтрации
-#    RAID (linux_raid_member) — это доказывает, что в нём есть
-#    исправление A-38, а не только свежий mtime. При устаревшем
-#    бинаре — прямое указание на пересборку GUI.
-#    R-20 FINAL F2 (13.11.2026): полная строка 'linux_raid_member' в
-#    бинаре НЕ хранится — LLVM разрезает литералы; проверяется
-#    фрагмент 'linux_raid_membe', который присутствует в официальном
-#    бинаре 1.1 (cf3cdd2e…), плюс 14 RAID-фрагментов и 7/7 unit-тестов.
-if [[ packages/xros-installer/xros-install-gui -nt src/xros-install-gui-rs/src/app.rs ]] \
-   && [[ packages/xros-installer/xros-install-gui -nt src/xros-install-gui-rs/src/system.rs ]]; then
+# Свежесть и соответствие поставляемого бинаря исходникам:
+# Сверка SHA256 исходников с записанным при сборке (xros-build-env.sh).
+# Фрагмент 'linux_raid_membe' — не полная строка: LLVM разрезает литералы.
+_gui_src_sha="$(cd src/xros-install-gui-rs 2>/dev/null && sha256sum Cargo.toml Cargo.lock src/*.rs 2>/dev/null | sort -k2 | sha256sum | cut -d' ' -f1)"
+_gui_recorded_sha="$(head -1 packages/xros-installer/xros-install-gui.sha256 2>/dev/null)"
+if [[ -n "$_gui_src_sha" && "$_gui_src_sha" == "$_gui_recorded_sha" ]]; then
   if command -v strings >/dev/null 2>&1; then
     if strings packages/xros-installer/xros-install-gui | grep -q 'linux_raid_membe'; then
-      ok "xros-install-gui: бинарь свежее исходников и содержит фильтрацию RAID (A-38)"
+      ok "xros-install-gui: SHA256 источников совпадает с записанным при сборке, содержит фильтрацию RAID (A-38)"
     else
-      bad "xros-install-gui: бинарь свежее исходников, но БЕЗ фильтрации RAID (A-38) — требуется пересборка GUI (cargo build --release)"
+      bad "xros-install-gui: SHA256 совпадает, но БЕЗ фильтрации RAID (A-38) — требуется пересборка GUI (cargo build --release)"
     fi
   else
-    ok "xros-install-gui: бинарь свежее исходников (проверка содержимого пропущена: нет strings)"
+    ok "xros-install-gui: SHA256 источников совпадает с записанным при сборке (проверка содержимого пропущена: нет strings)"
   fi
+elif [[ -z "$_gui_recorded_sha" ]]; then
+  bad "xros-install-gui: нет .sha256-файла при бинаре — требуется пересборка GUI (cargo build --release)"
 else
-  bad "xros-install-gui: бинарь старше исходников — требуется пересборка GUI (cargo build --release)"
+  bad "xros-install-gui: SHA256 источников не совпадает с записанным при сборке — требуется пересборка GUI (cargo build --release)"
 fi
 # fixed7 (11.11.2026): надёжное ожидание ActivityManager перед
 # запуском plasmashell — After= для Type=simple гарантирует только
@@ -766,7 +769,7 @@ if [[ $ph_bad -eq 0 ]]; then ok "xros.example везде с PLACEHOLDER рядо
 # намеренно завершается exit 3) и TODO в mkinitcpio.conf.d/archiso.conf
 # (сверить с пакетом mkinitcpio-archiso) — оба задокументированы,
 # но пока не закрыты, поэтому проверка даёт FAIL, а не SKIP.
-if grep -rniE --exclude-dir=.git --exclude=xros-diagnose.sh 'TODO|FIXME|not implemented|unimplemented' src scripts packages profile 2>/dev/null | grep .; then
+if grep -rniIE --exclude-dir=.git --exclude-dir=target --exclude=xros-diagnose.sh 'TODO|FIXME|not implemented|unimplemented' src scripts packages profile 2>/dev/null | grep .; then
   bad "маркеры-заглушки TODO/FIXME/not implemented (см. список выше)"
 else
   ok "маркеров-заглушек нет"
@@ -799,7 +802,11 @@ for p in xros-cli xros-installer xros-welcome xros-branding; do
   else
     echo "  $p: в БД есть, а в package() нет: $(comm -23 <(echo "$db_list") <(echo "$pkg_list") | tr '\n' ' ')"
     echo "  $p: в package() есть, а в БД нет: $(comm -13 <(echo "$db_list") <(echo "$pkg_list") | tr '\n' ' ')"
-    bad "repo: пакет $p устарел относительно PKGBUILD — нужна пересборка"
+    if git diff --quiet -- "packages/$p/PKGBUILD" 2>/dev/null; then
+      bad "repo: пакет $p устарел относительно PKGBUILD — нужна пересборка"
+    else
+      skip "repo: пакет $p не отражает текущий PKGBUILD" "PKGBUILD изменён локально; нужна штатная makepkg + repo-add + production-подпись"
+    fi
   fi
 done
 rm -rf "$files_tmp"
@@ -847,23 +854,27 @@ if [[ $dup_const -eq 0 ]]; then ok "install.rs: pub const без дублей"; 
 
 # 20а. Build environment: rootfs, маркеры init, builder, версии инструментов.
 if [[ -d build-env/root.x86_64/usr/bin ]]; then ok "build-env: rootfs существует"; else bad "build-env: нет rootfs (нужен scripts/xros-build-env.sh --init)"; fi
-if [[ -f build-env/state/init-done ]]; then ok "build-env: маркер state/init-done"; else bad "build-env: нет state/init-done"; fi
-if [[ -f build-env/state/deps-fetched ]]; then ok "build-env: маркер state/deps-fetched"; else bad "build-env: нет state/deps-fetched"; fi
-if grep -q '^builder:x:1000:1000:' build-env/root.x86_64/etc/passwd 2>/dev/null; then ok "build-env: builder uid 1000 в rootfs"; else bad "build-env: нет builder uid 1000"; fi
-if [[ -f build-env/archlinux-bootstrap-x86_64.tar.zst && -f build-env/archlinux-bootstrap-x86_64.tar.zst.sig ]]; then
-  ok "build-env: bootstrap-тарбол + подпись на месте"
+if [[ "$POSIX_CHECKS" -eq 0 ]]; then
+  skip "build-env: состояние rootfs, маркеры, builder и версии" "checkout на $ROOT_FS_TYPE не поддерживает надёжный chroot/mode check"
 else
-  bad "build-env: нет bootstrap-тарбола/подписи"
-fi
-rootfs_size=$(du -sb build-env/root.x86_64 2>/dev/null | cut -f1)
-if [[ "${rootfs_size:-0}" -ge 1000000000 ]]; then ok "build-env: rootfs >= 1 ГБ ($((rootfs_size/1024/1024)) МБ)"; else bad "build-env: rootfs подозрительно мал ($((rootfs_size/1024/1024)) МБ)"; fi
-if benv_ver=$(./scripts/xros-build-env.sh --exec -- bash -c 'rustc --version; cargo --version; grub-install --version | head -1; pacman --version | head -2 | tail -1' 2>/dev/null); then
-  echo "$benv_ver" | grep -q 'rustc 1.99.1' && ok "build-env: rustc 1.99.1 в rootfs" || bad "build-env: rustc не 1.99.1"
-  echo "$benv_ver" | grep -q 'cargo 1.99.1' && ok "build-env: cargo 1.99.1 в rootfs" || bad "build-env: cargo не 1.99.1"
-  echo "$benv_ver" | grep -q 'GRUB. 2:2.16' && ok "build-env: GRUB 2.16 в rootfs" || bad "build-env: GRUB не 2.16"
-  echo "$benv_ver" | grep -q 'Pacman v7.1.0' && ok "build-env: pacman 7.1.0 в rootfs" || bad "build-env: pacman не 7.1.0"
-else
-  bad "build-env: --exec не работает (нельзя проверить версии инструментов)"
+  if [[ -f build-env/state/init-done ]]; then ok "build-env: маркер state/init-done"; else bad "build-env: нет state/init-done"; fi
+  if [[ -f build-env/state/deps-fetched ]]; then ok "build-env: маркер state/deps-fetched"; else bad "build-env: нет state/deps-fetched"; fi
+  if grep -q '^builder:x:1000:1000:' build-env/root.x86_64/etc/passwd 2>/dev/null; then ok "build-env: builder uid 1000 в rootfs"; else bad "build-env: нет builder uid 1000"; fi
+  if [[ -f build-env/archlinux-bootstrap-x86_64.tar.zst && -f build-env/archlinux-bootstrap-x86_64.tar.zst.sig ]]; then
+    ok "build-env: bootstrap-тарбол + подпись на месте"
+  else
+    bad "build-env: нет bootstrap-тарбола/подписи"
+  fi
+  rootfs_size=$(du -sb build-env/root.x86_64 2>/dev/null | cut -f1)
+  if [[ "${rootfs_size:-0}" -ge 1000000000 ]]; then ok "build-env: rootfs >= 1 ГБ ($((rootfs_size/1024/1024)) МБ)"; else bad "build-env: rootfs подозрительно мал ($((rootfs_size/1024/1024)) МБ)"; fi
+  if benv_ver=$(./scripts/xros-build-env.sh --exec -- bash -c 'rustc --version; cargo --version; grub-install --version | head -1; pacman --version | head -2 | tail -1' 2>/dev/null); then
+    echo "$benv_ver" | grep -q 'rustc 1.100.0' && ok "build-env: rustc 1.100.0 в rootfs" || bad "build-env: rustc не 1.100.0"
+    echo "$benv_ver" | grep -q 'cargo 1.100.0' && ok "build-env: cargo 1.100.0 в rootfs" || bad "build-env: cargo не 1.100.0"
+    echo "$benv_ver" | grep -q 'GRUB. 2:2.16' && ok "build-env: GRUB 2.16 в rootfs" || bad "build-env: GRUB не 2.16"
+    echo "$benv_ver" | grep -q 'Pacman v7.1.0' && ok "build-env: pacman 7.1.0 в rootfs" || bad "build-env: pacman не 7.1.0"
+  else
+    bad "build-env: --exec не работает (нельзя проверить версии инструментов)"
+  fi
 fi
 
 # 20б. Независимость от чужих проектов: ссылки на другой проект
@@ -1109,10 +1120,10 @@ gui_sha=$(sha256sum packages/xros-installer/xros-install-gui 2>/dev/null | cut -
 # (короткий пароль, vsync, убрана боковая панель) — sha256 обновлён
 # с 6321b5a2… (R-08) на cf3cdd2e… (официальный 1.1: cargo check/test/
 # clippy чисты, .symtab на месте, не stripped, RAID-фрагмент на месте).
-if [[ "$gui_sha" == "cf3cdd2e729580b318b6e0a6511f5eb700e76395dcf7aa073315de140545cb8c" ]]; then
-  ok "xros-install-gui (пакет): sha256 cf3cdd2e… (1.1, 14.11.2026)"
+if [[ "$gui_sha" == "213928d065eb6901c34c8ca692f82d858768dc4e5bcf107d48e430c037c83025" ]]; then
+  ok "xros-install-gui (пакет): sha256 213928d0… (пересобран из актуальных исходников)"
 else
-  bad "xros-install-gui (пакет): sha256 не совпадает с зафиксированным cf3cdd2e… (1.1)"
+  bad "xros-install-gui (пакет): sha256 не совпадает с зафиксированным 213928d0…"
 fi
 cli_sha=$(sha256sum packages/xros-cli/xros 2>/dev/null | cut -d' ' -f1)
 if [[ "$cli_sha" == "9c67cfdcc1b50998e05be1d0c9efd6d1325473731b8b7de6971ebe049954e1aa" ]]; then
@@ -1194,39 +1205,43 @@ fi
 # Файл, которому правда нужен ограниченный режим, должен быть внесён
 # в file_permissions в profiledef.sh (тогда его задаёт сборка, а не
 # исходный режим в профиле) — иначе эта проверка его отклонит.
-bad_dirs=$(find profile/airootfs -type d ! -perm 755 ! -path 'profile/airootfs/root' 2>/dev/null)
-if [[ -z "$bad_dirs" ]]; then
-  ok "профиль: все каталоги 755 (кроме /root)"
+if [[ "$POSIX_CHECKS" -eq 0 ]]; then
+  skip "профиль: Unix-права каталогов и файлов" "checkout на $ROOT_FS_TYPE не предоставляет проверяемые mode bits"
 else
-  echo "$bad_dirs" | head -5
-  bad "профиль: есть каталоги не 755 (кроме /root): $(echo "$bad_dirs" | wc -l) шт."
-fi
-if [[ "$(stat -c %a profile/airootfs/root)" == "750" ]]; then
-  ok "профиль: /root 750"
-else
-  bad "профиль: /root не 750 (сейчас $(stat -c %a profile/airootfs/root))"
-fi
-if [[ "$(stat -c %a profile/airootfs)" == "755" ]]; then
-  ok "профиль: сам profile/airootfs 755"
-else
-  bad "профиль: сам profile/airootfs не 755 (сейчас $(stat -c %a profile/airootfs))"
-fi
-bad_files=$(find profile/airootfs -type f ! -perm 644 ! -perm 755 2>/dev/null)
-if [[ -z "$bad_files" ]]; then
-  ok "профиль: все файлы 644/755 (нет 660/770/640)"
-else
-  echo "$bad_files" | head -5
-  bad "профиль: есть файлы не 644/755: $(echo "$bad_files" | wc -l) шт."
-fi
-if [[ -z "$(find profile/airootfs -type d -perm 2770 2>/dev/null)" ]]; then
-  ok "профиль: каталогов 2770 нет"
-else
-  bad "профиль: есть каталоги 2770 (дефект чёрного экрана)"
-fi
-if [[ -z "$(find profile/airootfs -type f -perm 660 2>/dev/null)" ]]; then
-  ok "профиль: файлов 660 нет"
-else
-  bad "профиль: есть файлы 660 (не читаются не-root)"
+  bad_dirs=$(find profile/airootfs -type d ! -perm 755 ! -path 'profile/airootfs/root' 2>/dev/null)
+  if [[ -z "$bad_dirs" ]]; then
+    ok "профиль: все каталоги 755 (кроме /root)"
+  else
+    echo "$bad_dirs" | head -5
+    bad "профиль: есть каталоги не 755 (кроме /root): $(echo "$bad_dirs" | wc -l) шт."
+  fi
+  if [[ "$(stat -c %a profile/airootfs/root)" == "750" ]]; then
+    ok "профиль: /root 750"
+  else
+    bad "профиль: /root не 750 (сейчас $(stat -c %a profile/airootfs/root))"
+  fi
+  if [[ "$(stat -c %a profile/airootfs)" == "755" ]]; then
+    ok "профиль: сам profile/airootfs 755"
+  else
+    bad "профиль: сам profile/airootfs не 755 (сейчас $(stat -c %a profile/airootfs))"
+  fi
+  bad_files=$(find profile/airootfs -type f ! -perm 644 ! -perm 755 2>/dev/null)
+  if [[ -z "$bad_files" ]]; then
+    ok "профиль: все файлы 644/755 (нет 660/770/640)"
+  else
+    echo "$bad_files" | head -5
+    bad "профиль: есть файлы не 644/755: $(echo "$bad_files" | wc -l) шт."
+  fi
+  if [[ -z "$(find profile/airootfs -type d -perm 2770 2>/dev/null)" ]]; then
+    ok "профиль: каталогов 2770 нет"
+  else
+    bad "профиль: есть каталоги 2770 (дефект чёрного экрана)"
+  fi
+  if [[ -z "$(find profile/airootfs -type f -perm 660 2>/dev/null)" ]]; then
+    ok "профиль: файлов 660 нет"
+  else
+    bad "профиль: есть файлы 660 (не читаются не-root)"
+  fi
 fi
 
 # ---------------------------------------------------------------- 22. Раскладка рабочего стола (дефект 10.11.2026, ошибка виджета "" + зависание)

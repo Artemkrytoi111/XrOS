@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "${1:-}" in
+  diamond)
+    shift
+    exec /usr/local/bin/xros-installer-diamond "$@"
+    ;;
+  rust)
+    shift
+    exec /usr/local/bin/xros-install-gui "$@"
+    ;;
+  *)
+    echo "Usage: xros-installer-launcher {diamond|rust} [args...]" >&2
+    exit 2
+    ;;
+esac

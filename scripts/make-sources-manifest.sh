@@ -2,10 +2,12 @@
 # XrOS — manifest исходников для релизной проверки свежести (R-10).
 #
 # Использование: make-sources-manifest.sh <root> <repo-dir> [fpr]
-# Создаёт <repo-dir>/xros-sources.manifest — sha256 всех файлов,
-# из которых собираются пакеты: src/**, branding/** и PKGBUILD
-# пакетов (рецепты сборки). Пути — относительные от <root>, формат —
-# как у sha256sum (проверяется `sha256sum -c`).
+# Создаёт <repo-dir>/xros-sources.manifest — sha256 явных release inputs:
+# src/**, branding/**, profile/**, scripts/** и PKGBUILD пакетов.
+# Generated/backup-файлы, подписи, архивы и Markdown-документация в release
+# surface не входят.
+# Пути — относительные от <root>, формат — как у sha256sum (проверяется
+# `sha256sum -c`).
 # Если задан [fpr] — manifest подписывается этим ключом
 # (gpg --detach-sign -> xros-sources.manifest.sig) в GNUPGHOME
 # вызывающего (офлайн-машина владельца).
@@ -26,9 +28,20 @@ command -v sha256sum >/dev/null 2>&1 || { echo "make-sources-manifest: нет sh
 MANIFEST="$REPO_DIR/xros-sources.manifest"
 # Один источник истины для состава manifest: тот же find используется
 # в verify-sources-manifest.sh (сверка через повторную генерацию).
-# find по отсутствующему каталогу не роняет генерацию (|| true):
-# пустой manifest ловится проверкой -s ниже.
-(cd "$ROOT" && { find src branding -type f -print0 2>/dev/null || true; find packages -maxdepth 2 -name PKGBUILD -type f -print0 2>/dev/null || true; } | sort -z | xargs -0 sha256sum > "$MANIFEST.tmp") \
+# Пустые/отсутствующие release roots не роняют генерацию; пустой manifest
+# ловится проверкой -s ниже.
+(cd "$ROOT" && {
+  find src branding profile scripts -type f \
+    ! -name '*.bak' ! -name '*.pyc' ! -name '*.sig' ! -name '*.old' \
+    ! -name '*.pkg.tar.*' ! -path '*/__pycache__/*' \
+    ! -path '*/target/*' \
+    ! -name '*.md' \
+    ! -path 'profile/airootfs/usr/share/xros/repo/*' \
+    ! -path 'profile/airootfs/usr/local/bin/*' \
+    ! -path 'profile/airootfs/usr/local/lib/*' \
+    -print0 2>/dev/null || true
+  find packages -maxdepth 2 -name PKGBUILD -type f -print0 2>/dev/null || true
+} | sort -z | xargs -0 sha256sum > "$MANIFEST.tmp") \
   || { echo "make-sources-manifest: не удалось вычислить хеши" >&2; exit 1; }
 [[ -s "$MANIFEST.tmp" ]] || { echo "make-sources-manifest: пустой manifest — нет исходников?" >&2; exit 1; }
 mv "$MANIFEST.tmp" "$MANIFEST"

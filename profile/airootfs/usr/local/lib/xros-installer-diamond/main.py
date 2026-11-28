@@ -6,19 +6,25 @@
 Закрытие установщика НЕ завершает Live-сессию: приложение просто
 выходит, окно приветствия остаётся.
 """
+import ctypes
 import os
+import signal
 import sys
 
-# Самоповышение прав (найдено в Live UEFI build3, 11.11.2026): окно
-# приветствия запускает установщик БЕЗ sudo (Popen([INSTALLER])), а мост
-# вызывает движок напрямую, без sudo. Без этого блока Diamond работал бы
-# от пользователя xros, и движок падал бы на разметке/монтировании.
-# Паттерн — как в старом Rust GUI (main.rs): если не root, перевыполняем
-# себя через sudo (у живого пользователя xros sudo без пароля).
-# Wayland-переменные (WAYLAND_DISPLAY, XDG_RUNTIME_DIR) sudo сохраняет,
-# поэтому окно открывается в той же сессии.
+
+def _arm_parent_death():
+    if os.geteuid() != 0:
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(1, signal.SIGTERM) != 0:
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_PDEATHSIG) failed")
+    if os.getppid() == 1:
+        raise RuntimeError("parent exited before Diamond was armed")
+
 if os.geteuid() != 0:
-    os.execvp("sudo", ["sudo", sys.executable, os.path.abspath(__file__), *sys.argv[1:]])
+    print("xros-installer-diamond должен запускаться через xros-installer-launcher", file=sys.stderr)
+    sys.exit(1)
+_arm_parent_death()
 
 from PyQt6.QtCore import QUrl, QTimer
 from PyQt6.QtGui import QGuiApplication

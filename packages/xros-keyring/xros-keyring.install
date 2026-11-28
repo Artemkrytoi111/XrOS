@@ -1,6 +1,6 @@
 #!/bin/bash
-# xros-keyring.install — переходный пакет ключей XrOS.
-# post_install / post_upgrade: импортирует новый production-ключ
+# xros-keyring.install — пакет публичного production-ключа XrOS.
+# post_install / post_upgrade: импортирует production-ключ
 # в keyring установленной системы и локально подписывает его.
 # После этого система доверяет ОБОИМ ключам (старому и новому).
 # Старый ключ НЕ удаляется. Удаление пакета НЕ удаляет доверие
@@ -10,7 +10,7 @@
 # ВНИМАНИЕ: pacman при ошибке post_install всё равно считает пакет
 # установленным; при сбое переустановите пакет (pacman -S xros-keyring).
 
-NEW_FPR="9E71EDB1A341779B7F0B99EAD1A3963AA4E45CEB"
+NEW_FPR="52F963537CCD76C941B4DFD7B0DD24EE45116C8A"
 KEY_FILE="/usr/share/xros/xros-public-new.key"
 # Стандартное расположение keyring pacman в Arch/XrOS. Указано явно:
 # scriptlet выполняется внутри chroot корня установки, и pacman-key

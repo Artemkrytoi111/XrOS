@@ -48,7 +48,7 @@
 
       <div class="faq-item"><h3>Как обновляться?</h3><p>Штатно, через pacman: <code>sudo pacman -Syu</code>. Обновления приходят из подписанного репозитория XrOS; проверка подписи обязательна (SigLevel = Required).</p></div>
 
-      <div class="faq-item"><h3>Что с ротацией ключа подписи?</h3><p>Идёт переход со старого ключа B16629E8… на новый 9E71EDB1…. Переходный пакет <code>xros-keyring</code> доставляет новый ключ; переходный период — минимум 4 недели, до 13.12.2026. Подробнее — на странице <a href="security.html">«Безопасность»</a>.</p></div>
+      <div class="faq-item"><h3>Как устроен ключ подписи?</h3><p>Production-ключ XrOS использует бессрочный offline-master <code>52F96353…</code> и отдельный бессрочный online signing subkey <code>6393D0F5…</code>. Публичный ключ доставляется пакетом <code>xros-keyring</code>, приватные части не публикуются. Подробнее — на странице <a href="security.html">«Безопасность»</a>.</p></div>
 
       <div class="faq-item"><h3>Поддерживается ли Secure Boot?</h3><p>Нет, Secure Boot не требуется и не настраивается установщиком. Загрузка — только GRUB, UEFI или BIOS.</p></div>
 

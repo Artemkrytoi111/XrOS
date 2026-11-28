@@ -6,13 +6,14 @@
 # Два режима:
 #  * интерактивный (по умолчанию) — диалоги dialog;
 #  * неинтерактивный — для графического установщика (xros-install-gui):
-#    XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF=/tmp/xros-install.conf xros-install
-#    Конфиг — файл KEY='value' (права 600, создаёт GUI, установщик удаляет
-#    его после чтения). Значения: DISK, PARTMODE (erase|manual),
-#    ROOT_PART, EFI_PART, FS (ext4|btrfs|xfs), HOSTNAME, FULLNAME, USERNAME,
-#    USERPASS, ROOTPASS, AUTOLOGIN (0|1), TIMEZONE, KEYMAP, DE, OFFICE.
+#    XROS_NONINTERACTIVE=1 xros-install
+#    Конфиг создаётся GUI в закрытом каталоге /run/xros-install как
+#    KEY='value' (права 600) и удаляется установщиком после чтения.
+#    Значения: DISK, PARTMODE (erase|manual), ROOT_PART, EFI_PART,
+#    FS (ext4|btrfs|xfs), HOSTNAME, FULLNAME, USERNAME, USERPASS,
+#    ROOTPASS, AUTOLOGIN (0|1), TIMEZONE, KEYMAP, DE, OFFICE.
 #    Прогресс в неинтерактивном режиме пишется в stdout в формате
-#    dialog-gauge (число = процент, XXX = сообщение) и в /tmp/xros-install.log.
+#    dialog-gauge (число = процент, XXX = сообщение) и в журнал runtime-каталога.
 set -u -o pipefail
 # umask 077: журнал установки и любые файлы, создаваемые движком,
 # не должны быть читаемы другими пользователями (в конфиге — пароли).
@@ -23,16 +24,18 @@ export LANG=ru_RU.UTF-8
 TITLE="XrOS 1.0 — Установщик"
 BACKTITLE="XrOS  •  на базе Arch Linux"
 TARGET="/mnt/xros-install"
-LOG="/tmp/xros-install.log"
-# Журнал создаётся ПОСЛЕ перевыполнения через sudo (ниже) — см. fixed6.
-# Остаток прошлого запуска (de-result мог остаться после обрыва) —
-# зачищаем в начале, а не только в cleanup.
-rm -f /tmp/xros-de-result
+RUNTIME_DIR="/run/xros-install"
+LOG="$RUNTIME_DIR/xros-install.log"
+CONF="$RUNTIME_DIR/xros-install.conf"
+DE_RESULT_FILE="$RUNTIME_DIR/xros-de-result"
+# Runtime-каталог создаётся только после перевыполнения через sudo.
+# Его владелец и права проверяются до любых записей root-процессом.
 
 BANNER=$(cat /usr/share/xros/banner.txt 2>/dev/null || echo "XrOS 1.0")
 
 say() { echo "[xros-install] $*" | tee -a "$LOG"; }
 
+# shellcheck disable=SC2069
 dlg() { dialog --backtitle "$BACKTITLE" --title "$TITLE" --colors "$@" 2>&1 >/dev/tty; }
 
 NONINTERACTIVE="${XROS_NONINTERACTIVE:-}"
@@ -49,17 +52,34 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
   fi
 fi
-# fixed6 (11.11.2026): журнал создаётся ТОЛЬКО ЗДЕСЬ — после перевыполнения
-# через sudo, когда мы гарантированно root. Раньше он создавался выше от
-# xros (umask 077, mode 600), и на повторном запуске root-процесс не мог
-# открыть его на дозапись (Permission denied даже для root) — из-за этого
-# `sgdisk >>"$LOG"` падал, и движок рапортовал «sgdisk не удался», хотя сам
-# sgdisk работал. Симлинк вместо журнала — классическая атака: `: >` пошёл
-# бы по ссылке от root и зачистил бы чужой файл. Чужой журнал удаляем.
-[[ -L "$LOG" ]] && rm -f "$LOG"
-if [[ -e "$LOG" && ! -O "$LOG" ]]; then rm -f "$LOG"; fi
-: > "$LOG"
+# Runtime-каталог принадлежит root и закрыт от остальных пользователей.
+# GUI создаёт его заранее через штатный privileged launcher; движок
+# отказывается работать с подменённым каталогом или файлами.
+if [[ -L "$RUNTIME_DIR" || ( -e "$RUNTIME_DIR" && ! -d "$RUNTIME_DIR" ) ]]; then
+  echo "ОШИБКА: небезопасный runtime-каталог"; exit 1
+fi
+if [[ ! -d "$RUNTIME_DIR" ]]; then
+  install -d -m 700 -o root -g root "$RUNTIME_DIR"
+fi
+if [[ ! -O "$RUNTIME_DIR" || ! -w "$RUNTIME_DIR" \
+   || "$(stat -c '%u:%a' "$RUNTIME_DIR" 2>/dev/null || true)" != "0:700" ]]; then
+  echo "ОШИБКА: небезопасный runtime-каталог"; exit 1
+fi
+if [[ -L "$LOG" ]]; then
+  echo "ОШИБКА: небезопасный файл журнала"; exit 1
+fi
+if [[ -e "$LOG" && ! -f "$LOG" ]]; then
+  echo "ОШИБКА: небезопасный файл журнала"; exit 1
+fi
+if [[ -e "$LOG" && ! -O "$LOG" ]]; then
+  echo "ОШИБКА: чужой файл журнала"; exit 1
+fi
+(umask 077; : > "$LOG") || { echo "ОШИБКА: не удалось создать журнал"; exit 1; }
 chmod 600 "$LOG"
+if [[ -L "$DE_RESULT_FILE" || ( -e "$DE_RESULT_FILE" && ! -f "$DE_RESULT_FILE" ) ]]; then
+  echo "ОШИБКА: небезопасный файл результата"; exit 1
+fi
+rm -f -- "$DE_RESULT_FILE"
 if [[ ! -d /run/archiso/bootmnt && ! -f /run/archiso/airootfs/etc/os-release ]]; then
   if [[ -z "$NONINTERACTIVE" ]]; then
     dialog --backtitle "$BACKTITLE" --title "$TITLE" --msgbox "Внимание: это не похоже на живую систему XrOS.\nУстановка будет копировать текущую систему (/)." 10 60
@@ -69,6 +89,11 @@ if [[ ! -d /run/archiso/bootmnt && ! -f /run/archiso/airootfs/etc/os-release ]];
 fi
 
 # --- XROS: защита дочернего процесса (начало) ---
+# При извлечении этого блока тестовыми harness-ами верхние константы
+# отсутствуют; production-путь уже задан выше и не меняется.
+RUNTIME_DIR="${RUNTIME_DIR:-/tmp}"
+CONF="${CONF:-$RUNTIME_DIR/xros-install.conf}"
+DE_RESULT_FILE="${DE_RESULT_FILE:-$RUNTIME_DIR/xros-de-result}"
 # Движок — дочерний процесс графического установщика. Если GUI умирает
 # (падение, kill извне), движок НЕ должен продолжать форматирование /
 # копирование системы без интерфейса. GUI страхует это с двух сторон
@@ -166,7 +191,7 @@ xros_cleanup() {
   xros_kill_children
   # Таймаут: занятая точка не должна вешать cleanup навсегда.
   timeout 15 umount -R "$TARGET" 2>/dev/null || true
-  rm -f /tmp/xros-de-result /tmp/xros-install.conf
+  rm -f -- "$DE_RESULT_FILE" "$CONF"
   sync 2>/dev/null || true
   say "Очистка завершена: $TARGET размонтирован, временные файлы удалены"
 }
@@ -980,13 +1005,53 @@ xros_install_hw_drivers() {
   return 0
 }
 
-# --- Выбор значений: диалоги или конфиг GUI ---
+# --- XROS: безопасный парсер конфигурации (начало) ---
+xros_decode_config_value() {
+  local raw="$1" body out="" prefix rest
+  [[ "${raw:0:1}" == "'" && "${raw: -1}" == "'" ]] || return 1
+  body="${raw:1:${#raw}-2}"
+  while [[ -n "$body" ]]; do
+    if [[ "$body" != *"'"* ]]; then
+      out+="$body"
+      body=""
+    else
+      prefix="${body%%\'*}"
+      out+="$prefix"
+      rest="${body:${#prefix}}"
+      [[ "${rest:0:4}" == "'\\''" ]] || return 1
+      out+="'"
+      body="${rest:4}"
+    fi
+  done
+  printf '%s' "$out"
+}
+
+xros_load_config() {
+  local line key raw value
+  declare -A seen=()
+  [[ "$CONF" == "$RUNTIME_DIR/xros-install.conf" ]] || { say "ОШИБКА: недопустимый путь конфигурации"; return 1; }
+  [[ -f "$CONF" && ! -L "$CONF" && -O "$CONF" ]] || { say "ОШИБКА: небезопасный файл настроек"; return 1; }
+  [[ "$(stat -c '%a' "$CONF" 2>/dev/null || true)" == "600" ]] || { say "ОШИБКА: небезопасные права файла настроек"; return 1; }
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^([A-Z_]+)=(.*)$ ]] || { say "ОШИБКА: недопустимая строка конфигурации"; return 1; }
+    key="${BASH_REMATCH[1]}"; raw="${BASH_REMATCH[2]}"
+    case "$key" in
+      DISK|PARTMODE|ROOT_PART|EFI_PART|FS|HOSTNAME|FULLNAME|USERNAME|USERPASS|ROOTPASS|AUTOLOGIN|TIMEZONE|KEYMAP|DE|OFFICE) ;;
+      *) say "ОШИБКА: неизвестный параметр конфигурации $key"; return 1 ;;
+    esac
+    [[ -z "${seen[$key]+x}" ]] || { say "ОШИБКА: дублированный параметр конфигурации $key"; return 1; }
+    value=$(xros_decode_config_value "$raw") || { say "ОШИБКА: недопустимое значение конфигурации $key"; return 1; }
+    seen[$key]=1
+    printf -v "$key" '%s' "$value"
+  done < "$CONF"
+  rm -f -- "$CONF"
+}
+# --- XROS: безопасный парсер конфигурации (конец) ---
+
 if [[ -n "$NONINTERACTIVE" ]]; then
-  CONF="${XROS_INSTALL_CONF:-/tmp/xros-install.conf}"
-  [[ -f "$CONF" ]] || { say "ОШИБКА: нет файла настроек $CONF"; exit 1; }
-  # shellcheck disable=SC1090
-  set -a; . "$CONF"; set +a
-  rm -f "$CONF"
+  [[ -n "${XROS_INSTALL_CONF:-}" ]] || { say "ОШИБКА: не задан путь конфигурации"; exit 1; }
+  CONF="$XROS_INSTALL_CONF"
+  xros_load_config || { rm -f -- "$CONF"; exit 1; }
   : "${PARTMODE:=erase}"
   : "${FS:=ext4}"
   : "${TIMEZONE:=Europe/Astrakhan}"
@@ -1808,7 +1873,7 @@ CHROOT_EOF
     # -S с подписью в выводе = подпись, иначе — общая ошибка pacman.
     # Вывод -S — в отдельный файл, чтобы проверка подписи не ловила
     # старые строки из общего журнала (он же дописывается в $LOG).
-    DE_ERR_LOG="$(mktemp /tmp/xros-de-install.XXXXXX 2>/dev/null)" || DE_ERR_LOG="$LOG"
+    DE_ERR_LOG="$(mktemp "$RUNTIME_DIR/xros-de-install.XXXXXX" 2>/dev/null)" || DE_ERR_LOG="$LOG"
     DE_SYNC_OK=0
     DE_INSTALL_OK=0
     if arch-chroot "$TARGET" pacman -Sy --noconfirm >>"$LOG" 2>&1; then
@@ -1848,7 +1913,7 @@ CHROOT_EOF
     fi
     [[ "$DE_ERR_LOG" != "$LOG" ]] && rm -f "$DE_ERR_LOG"
   fi
-  echo "$DE_RESULT" > /tmp/xros-de-result
+  (umask 077; printf '%s\n' "$DE_RESULT" > "$DE_RESULT_FILE") || { say "ОШИБКА: не удалось записать итог установки"; exit 1; }
 
   # Пункт 7 (1.1): автообновление XrOS — новые юниты xros-auto-update.*.
   # Старые юниты xros-update.* из пакета xros-cli НЕ включаются никогда:
@@ -2007,7 +2072,7 @@ if [[ -n "$NONINTERACTIVE" ]]; then
     echo "INSTALL_FAILED"
     exit 1
   fi
-  DE_RESULT=$(cat /tmp/xros-de-result 2>/dev/null || echo "$DE_NAME")
+  DE_RESULT=$(cat "$DE_RESULT_FILE" 2>/dev/null || echo "$DE_NAME")
   say "Готово! XrOS установлена. Компьютер: $HOSTNAME, пользователь: $USERNAME, оболочка: $DE_RESULT"
   echo "INSTALL_DONE"
   exit 0
@@ -2031,7 +2096,7 @@ $(tail -n 10 "$LOG")
   exit 1
 fi
 
-DE_RESULT=$(cat /tmp/xros-de-result 2>/dev/null || echo "$DE_NAME")
+DE_RESULT=$(cat "$DE_RESULT_FILE" 2>/dev/null || echo "$DE_NAME")
 dialog --colors --backtitle "$BACKTITLE" --title "$TITLE" --yes-label "Перезагрузить" --no-label "Остаться в живой системе" --yesno "\Zb\Z4Готово! XrOS установлена на $DISK.\Zn\n\nКомпьютер: $HOSTNAME\nПользователь: $USERNAME\nОболочка: $DE_RESULT\nЗагрузчик: GRUB с темой XrOS\n\nНе забудьте вынуть флешку/диск с ISO перед перезагрузкой." 15 65
 if [[ $? -eq 0 ]]; then reboot; fi
 exit 0

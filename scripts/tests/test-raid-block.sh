@@ -98,7 +98,7 @@ blkid() {
   # R-18: настоящий blkid при ошибке доступа пишет в stderr
   # (проверено: 'blkid: error: ...: Permission denied', rc=2).
   [[ -n "$BLKID_STDERR" ]] && echo "$BLKID_STDERR" >&2
-  local d="${@: -1}" _type
+  local d="${!#}" _type
   _type="$(printf '%s\n' "$BLKID_TABLE" | awk -v dev="$d" '$1==dev {print $2; exit}')"
   if [[ -n "$_type" ]]; then printf '%s\n' "$_type"; return 0; fi
   return 2
@@ -326,7 +326,21 @@ else
 fi
 
 # ================= D. РЕАЛЬНЫЙ движок в unshare ============================
-if command -v gcc >/dev/null 2>&1 && command -v unshare >/dev/null 2>&1; then
+REAL_ENGINE_E2E=1
+ROOT_FS_TYPE="$(stat -f -c '%T' "$ROOT" 2>/dev/null || true)"
+if [[ "$ROOT_FS_TYPE" == "9p" || "$ROOT_FS_TYPE" == "v9fs" ]]; then
+  REAL_ENGINE_E2E=0
+  for scenario in raid-lsblk raid-blkid clean lsblk-error blkid-error unreadable-missing unreadable-head; do
+    skip "e2e $scenario" "тестовый checkout на $ROOT_FS_TYPE не поддерживает надёжный mount namespace"
+  done
+elif ! command -v gcc >/dev/null 2>&1 || ! command -v unshare >/dev/null 2>&1; then
+  REAL_ENGINE_E2E=0
+  skip "e2e реальный движок в unshare" "нет gcc или unshare на этом хосте"
+elif ! unshare -rm sh -c 'set -e; mount -t tmpfs tmpfs /run; mountpoint -q /run; install -d -m 700 -o root -g root /run/xros-raid-probe; mount -t tmpfs tmpfs /mnt; mkdir -p /mnt/xros-install/etc /mnt/xros-install/boot' >/dev/null 2>&1; then
+  REAL_ENGINE_E2E=0
+  skip "e2e реальный движок в unshare" "защищённый /run недоступен в текущем окружении"
+fi
+if [[ "$REAL_ENGINE_E2E" == "1" ]]; then
   # LD_PRELOAD-шим (та же идея, что в test-child-process-extended.sh).
   # XROS_FAKEBLK — список путей через ':' (диск + его разделы):
   # stat() подменяет их тип на блочное устройство, чтобы [[ -b ]]
@@ -460,7 +474,7 @@ EOF
     # R-18: в режиме unreadable-head заглушка head падает на fake-диске.
     local head_fail=0
     [[ "$mode" == "unreadable-head" ]] && head_fail=1
-    rm -f "$T/calls.log" /tmp/xros-install.log
+    rm -f "$T/calls.log"
     cat > "$d/conf" <<EOF
 DISK='$T/fakedisk'
 PARTMODE='erase'
@@ -482,25 +496,34 @@ EOF
     esac
     cat > "$d/inner.sh" <<EOF
 #!/usr/bin/env bash
-set -u
+set -euo pipefail
 T="$T"; ENGINE="$ENGINE"
+mount -t tmpfs tmpfs /run
+mountpoint -q /run
+mkdir -p /run/xros-install
+chmod 700 /run/xros-install
 mount -t tmpfs tmpfs /mnt
 mkdir -p /mnt/xros-install/etc /mnt/xros-install/boot
 export XROS_FAKEBLK="$FAKEBLK_LIST"
-export XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF="$d/conf"
+export XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF=/run/xros-install/xros-install.conf
+cp "$d/conf" "\$XROS_INSTALL_CONF"
+chmod 600 "\$XROS_INSTALL_CONF"
 export PATH="\$T/e2e/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export LSBLK_MODE="$mode"
-setsid --wait env LD_PRELOAD="\$T/fakeblk.so" XROS_FAKEBLK="$FAKEBLK_LIST" XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF="$d/conf" PATH="\$T/e2e/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" LSBLK_MODE="$mode" XROS_HEAD_FAIL="$head_fail" bash "\$ENGINE" > "$d/engine.out" 2>&1
-RC=\$?
+if setsid --wait env LD_PRELOAD="\$T/fakeblk.so" XROS_FAKEBLK="$FAKEBLK_LIST" XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF=/run/xros-install/xros-install.conf PATH="\$T/e2e/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" LSBLK_MODE="$mode" XROS_HEAD_FAIL="$head_fail" bash "\$ENGINE" > "$d/engine.out" 2>&1; then
+  RC=0
+else
+  RC=\$?
+fi
 {
   echo "rc=\$RC"
-  if grep -q "заблокирован" "$d/engine.out" 2>/dev/null; then echo "blocked_msg=yes"; elif [[ -f /tmp/xros-install.log ]] && grep -q "заблокирован" /tmp/xros-install.log 2>/dev/null; then echo "blocked_msg=yes"; else echo "blocked_msg=no"; fi
-  if grep -q "не смог прочитать\|невозможно проверить" "$d/engine.out" 2>/dev/null || { [[ -f /tmp/xros-install.log ]] && grep -q "не смог прочитать\|невозможно проверить" /tmp/xros-install.log 2>/dev/null; }; then echo "check_error=yes"; else echo "check_error=no"; fi
+  if grep -q "заблокирован" "$d/engine.out" /run/xros-install/xros-install.log 2>/dev/null; then echo "blocked_msg=yes"; else echo "blocked_msg=no"; fi
+  if grep -q "не смог прочитать\|невозможно проверить" "$d/engine.out" /run/xros-install/xros-install.log 2>/dev/null; then echo "check_error=yes"; else echo "check_error=no"; fi
   # R-18 missing: движок останавливается ещё раньше — на собственной
   # проверке [[ -b \$DISK ]] («диск ... не найден»), до вызова
   # xros_disk_blocked. Это тоже безопасный стоп до wipefs, но с
   # другим сообщением — отдельный флаг, чтобы не смешивать.
-  if grep -q "не найден" "$d/engine.out" 2>/dev/null || { [[ -f /tmp/xros-install.log ]] && grep -q "не найден" /tmp/xros-install.log 2>/dev/null; }; then echo "not_found_msg=yes"; else echo "not_found_msg=no"; fi
+  if grep -q "не найден" "$d/engine.out" /run/xros-install/xros-install.log 2>/dev/null; then echo "not_found_msg=yes"; else echo "not_found_msg=no"; fi
   grep -q "^wipefs" "\$T/calls.log" && echo "wipefs_called=yes" || echo "wipefs_called=no"
   grep -q "^sgdisk" "\$T/calls.log" && echo "sgdisk_called=yes" || echo "sgdisk_called=no"
   grep -q "^mkfs" "\$T/calls.log" && echo "mkfs_called=yes" || echo "mkfs_called=no"
@@ -509,7 +532,14 @@ RC=\$?
 umount -R /mnt/xros-install 2>/dev/null || true
 EOF
     chmod +x "$d/inner.sh"
-    unshare -rm bash "$d/inner.sh"
+    if ! unshare -rm bash "$d/inner.sh"; then
+      for scenario in raid-lsblk raid-blkid clean lsblk-error blkid-error unreadable-missing unreadable-head; do
+        skip "e2e $scenario" "внутренний namespace завершился с ошибкой"
+      done
+      echo "ИТОГ: PASS=$PASS FAIL=$FAIL SKIP=$SKIPN"
+      [[ "$FAIL" -eq 0 ]] || exit 1
+      exit 0
+    fi
   }
   result_val() { grep "^$2=" "$1" 2>/dev/null | cut -d= -f2- | head -1; }
 
@@ -578,8 +608,6 @@ EOF
   [[ "$(result_val "$R" wipefs_called)" == "no" ]] && ok "e2e R-18 head-fail: wipefs НЕ вызван" || bad "e2e R-18 head-fail: wipefs НЕ вызван"
   [[ "$(result_val "$R" sgdisk_called)" == "no" ]] && ok "e2e R-18 head-fail: sgdisk НЕ вызван" || bad "e2e R-18 head-fail: sgdisk НЕ вызван"
   [[ "$(result_val "$R" mkfs_called)" == "no" ]] && ok "e2e R-18 head-fail: mkfs НЕ вызван" || bad "e2e R-18 head-fail: mkfs НЕ вызван"
-else
-  skip "e2e реальный движок в unshare" "нет gcc или unshare на этом хосте"
 fi
 
 # ================= E. Статика: защита и синхронность =======================

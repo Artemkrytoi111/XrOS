@@ -1,6 +1,4 @@
-// Установщик XrOS. Без рута тут делать нечего —
-// если запустили обычным пользователем, перевыполняемся через sudo
-// (у живого пользователя xros sudo без пароля) и едем дальше.
+// Установщик XrOS запускается через root-owned launcher.
 
 mod app;
 mod install;
@@ -8,20 +6,9 @@ mod steps;
 mod system;
 mod theme;
 
-use std::os::unix::process::CommandExt;
-
 fn main() {
     if unsafe { libc::geteuid() != 0 } {
-        let exe =
-            std::env::current_exe().unwrap_or_else(|_| "xros-install-gui".into());
-        // Wayland: без WAYLAND_DISPLAY/XDG_RUNTIME_DIR root-процесс
-        // установщика не найдёт сокет композитора и упадёт на XWayland.
-        let err = std::process::Command::new("sudo")
-            .arg("--preserve-env=DISPLAY,WAYLAND_DISPLAY,XDG_RUNTIME_DIR,XAUTHORITY,DBUS_SESSION_BUS_ADDRESS")
-            .arg(&exe)
-            .args(std::env::args().skip(1))
-            .exec();
-        eprintln!("sudo не сработал: {err}");
+        eprintln!("xros-install-gui должен запускаться через xros-installer-launcher");
         std::process::exit(1);
     }
 

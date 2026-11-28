@@ -2,7 +2,7 @@
 Type=Application
 Name=Установить XrOS
 Comment=Установить XrOS на диск
-Exec=/usr/local/bin/xros-install-gui
+Exec=/usr/bin/sudo /usr/local/bin/xros-installer-launcher diamond
 Icon=/usr/share/xros/xros-logo.png
 Terminal=false
 Categories=System;

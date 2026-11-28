@@ -165,6 +165,35 @@ if grep -q 'make-sources-manifest.sh' "$ROOT/scripts/sign-repo-offline.sh"; then
 else
   bad "sign-repo-offline.sh: создаёт manifest исходников"
 fi
+# 13. Release inputs include profile/build files and exclude generated,
+#     backup and documentation-only files.
+mkdir -p "$R/profile" "$R/profile/airootfs/usr/share/xros/repo" \
+  "$R/profile/airootfs/usr/local/bin" "$R/profile/airootfs/usr/local/lib" \
+  "$R/scripts" "$R/src/__pycache__"
+printf 'profile input\n' > "$R/profile/profiledef.sh"
+printf 'build input\n' > "$R/scripts/build.sh"
+printf 'repo snapshot\n' > "$R/profile/airootfs/usr/share/xros/repo/xros.db.tar.gz"
+printf 'staged binary\n' > "$R/profile/airootfs/usr/local/bin/xros"
+printf 'staged library\n' > "$R/profile/airootfs/usr/local/lib/bridge.py"
+printf 'generated\n' > "$R/src/generated.pyc"
+printf 'generated\n' > "$R/src/__pycache__/generated.pyc"
+printf 'generated\n' > "$R/src/generated.sig"
+printf 'generated\n' > "$R/profile/old.db.old"
+printf 'generated\n' > "$R/profile/generated.pkg.tar.zst"
+printf 'backup\n' > "$R/src/old.bak"
+printf 'docs\n' > "$R/README.md"
+printf 'docs\n' > "$R/src/README.md"
+"$MAKE" "$R" "$REPO" "$FPR" > /dev/null 2>&1
+if grep -qE '  profiledef\.sh$|  scripts/build\.sh$' "$REPO/xros-sources.manifest"; then
+  ok "manifest: профиль и build inputs включены"
+else
+  bad "manifest: профиль и build inputs включены"
+fi
+if grep -qE '\.bak$|\.pyc$|\.sig$|\.old$|\.pkg\.tar\.|README\.md$|__pycache__|profile/airootfs/usr/share/xros/repo/|profile/airootfs/usr/local/bin/|profile/airootfs/usr/local/lib/' "$REPO/xros-sources.manifest"; then
+  bad "manifest: generated/backup/documentation files исключены"
+else
+  ok "manifest: generated/backup/documentation files исключены"
+fi
 
 echo "ИТОГ: PASS=$PASS FAIL=$FAIL SKIP=$SKIPN"
 if [[ $FAIL -gt 0 ]]; then

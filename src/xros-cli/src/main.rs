@@ -39,7 +39,7 @@ fn main() {
             let pacman_args = if cmd == "update" {
                 vec!["-Sy"]
             } else {
-                vec!["-Su"]
+                vec!["-Syu"]
             };
             let status = Command::new("pacman").args(&pacman_args).status();
             match status {

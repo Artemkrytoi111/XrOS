@@ -1,18 +1,20 @@
-# XrOS — переходный пакет xros-keyring: новый production GPG-ключ.
-# Доставляет проверенный публичный ключ нового production-ключа
-# (отпечаток 9E71EDB1A341779B7F0B99EAD1A3963AA4E45CEB) в установленные
+# shellcheck shell=bash
+# shellcheck disable=SC2034,SC2154
+# XrOS — пакет xros-keyring: production GPG-ключ с offline-master и online subkey.
+# Доставляет проверенный публичный ключ production-ключа
+# (отпечаток 52F963537CCD76C941B4DFD7B0DD24EE45116C8A) в установленные
 # системы, которые сейчас доверяют только старому ключу.
 # post_install импортирует ключ и локально подписывает его (pacman-key),
 # после чего система доверяет обоим ключам. Старый ключ НЕ удаляется.
 # Пакет идемпотентен: повторная установка/обновление безопасны.
-# Кандидат Фазы 5 (ротация production-ключа): подписывается старым
-# production-ключом на переходный период. В пакете — ТОЛЬКО публичный
+# Пакет распространяет только публичную часть; подпись пакета выполняется
+# текущим online signing subkey. В пакете — ТОЛЬКО публичный
 # ключ; приватных ключей, паролей и сертификатов отзыва нет.
 
 pkgname=xros-keyring
 pkgver=1.0
 pkgrel=1
-pkgdesc="Переходный пакет ключей XrOS: новый production GPG-ключ"
+pkgdesc="Публичный production GPG-ключ XrOS"
 arch=('any')
 license=('custom:XrOS')
 # Зависимость от pacman намеренно НЕ указана: pacman-key и gpg, используемые
@@ -22,14 +24,14 @@ license=('custom:XrOS')
 options=('!debug')
 install=xros-keyring.install
 source=('xros-public-new.key')
-sha256sums=('3ffb45e5bf500c51590088621632a48b0c7ab0ba84eb846f295b624f128e5d5e')
+sha256sums=('cfc2b490d24c6fa84817bd1084372b8954c1f8ab4a8ab2a4008b816cd92c4fd3')
 
 prepare() {
   # Защита на этапе сборки: в пакете должен быть ровно проверенный ключ.
   local fpr
   fpr="$(gpg --batch --show-keys --with-colons "$srcdir/xros-public-new.key" 2>/dev/null | awk -F: '$1 == "fpr" {print $10}')"
-  [[ "$fpr" == "9E71EDB1A341779B7F0B99EAD1A3963AA4E45CEB" ]] \
-    || { error "xros-public-new.key: отпечаток $fpr не совпадает с ожидаемым 9E71EDB1A341779B7F0B99EAD1A3963AA4E45CEB"; exit 1; }
+  [[ "$fpr" == "52F963537CCD76C941B4DFD7B0DD24EE45116C8A" ]] \
+    || { error "xros-public-new.key: отпечаток $fpr не совпадает с ожидаемым 52F963537CCD76C941B4DFD7B0DD24EE45116C8A"; exit 1; }
 }
 
 package() {

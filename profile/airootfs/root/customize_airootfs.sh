@@ -60,7 +60,7 @@ rm -rf /etc/systemd/system/getty@tty1.service.d
 # Живой пользователь xros.
 useradd -m -G wheel,audio,video,optical,storage,render -s /bin/bash xros
 passwd -l xros || true
-echo "xros ALL=(root) NOPASSWD: /usr/local/bin/xros-install" > /etc/sudoers.d/live-xros
+echo "xros ALL=(root) NOPASSWD: /usr/local/bin/xros-installer-launcher" > /etc/sudoers.d/live-xros
 chmod 440 /etc/sudoers.d/live-xros
 
 # Обои и тёмная тема KDE для живого пользователя.
@@ -115,7 +115,7 @@ cat > /home/xros/Desktop/xros-install.desktop <<'DESK_EOF'
 Type=Application
 Name=Установить XrOS
 Comment=Установить XrOS на диск
-Exec=/usr/local/bin/xros-install-gui
+Exec=/usr/bin/sudo /usr/local/bin/xros-installer-launcher diamond
 Icon=/usr/share/xros/xros-logo.png
 Terminal=false
 Categories=System;
@@ -142,6 +142,8 @@ ID_LIKE=arch
 BUILD_ID=1.0
 VERSION="1.0"
 VERSION_ID="1.0"
+XROS_DESKTOP="KDE Plasma"
+XROS_BOOTLOADER="GRUB"
 ANSI_COLOR="38;2;139;0;255"
 LOGO=xros
 IMAGE_ID=xros
@@ -231,8 +233,8 @@ grep -q '^Server' /etc/pacman.d/mirrorlist \
 chmod 644 /etc/pacman.d/mirrorlist
 
 # Права на установщики (перестраховка: profiledef.sh тоже их задаёт).
-chown root:root /usr/local/bin/xros-install /usr/local/bin/xros-welcome /usr/local/bin/xros-welcome-gui 2>/dev/null || true
-chmod 755 /usr/local/bin/xros-install /usr/local/bin/xros-welcome /usr/local/bin/xros-welcome-gui 2>/dev/null || true
+chown root:root /usr/local/bin/xros-install /usr/local/bin/xros-installer-launcher /usr/local/bin/xros-welcome /usr/local/bin/xros-welcome-gui 2>/dev/null || true
+chmod 755 /usr/local/bin/xros-install /usr/local/bin/xros-installer-launcher /usr/local/bin/xros-welcome /usr/local/bin/xros-welcome-gui 2>/dev/null || true
 
 # Корень живой системы — 0755 (fixed10, Этап 2): mkarchiso копирует профиль
 # в work/airootfs, и корень там оказывался 555 — в squashfs и, через rsync,

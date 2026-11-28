@@ -444,6 +444,7 @@ step "Бинари в profile/airootfs/usr/local/bin/"
 BIN_DIR="$PROFILE/airootfs/usr/local/bin"
 cp "$ROOT/packages/xros-cli/xros" "$BIN_DIR/xros"
 cp "$ROOT/packages/xros-installer/xros-install-gui" "$BIN_DIR/xros-install-gui"
+cp "$ROOT/packages/xros-installer/xros-installer-launcher" "$BIN_DIR/xros-installer-launcher"
 cp "$ROOT/src/xros-install" "$BIN_DIR/xros-install"
 cp "$ROOT/src/xros-welcome" "$BIN_DIR/xros-welcome"
 cp "$ROOT/src/xros-welcome-gui" "$BIN_DIR/xros-welcome-gui"
@@ -463,10 +464,10 @@ cp "$DIAMOND_SRC/xros-installer-diamond" "$BIN_DIR/xros-installer-diamond"
 find "$DIAMOND_LIB" -type d -exec chmod 755 {} +
 find "$DIAMOND_LIB" -type f -exec chmod 644 {} +
 chmod 755 "$PROFILE/airootfs/usr/local/lib"
-chmod 755 "$BIN_DIR/xros" "$BIN_DIR/xros-install-gui" "$BIN_DIR/xros-install" \
+chmod 755 "$BIN_DIR/xros" "$BIN_DIR/xros-install-gui" "$BIN_DIR/xros-installer-launcher" "$BIN_DIR/xros-install" \
           "$BIN_DIR/xros-welcome" "$BIN_DIR/xros-welcome-gui" \
           "$BIN_DIR/xros-installer-diamond"
-for b in xros xros-install-gui xros-install xros-welcome xros-welcome-gui xros-installer-diamond; do
+for b in xros xros-install-gui xros-installer-launcher xros-install xros-welcome xros-welcome-gui xros-installer-diamond; do
     [[ -x "$BIN_DIR/$b" ]] || die "нет исполняемого $BIN_DIR/$b"
 done
 [[ -f "$DIAMOND_LIB/main.py" && -f "$DIAMOND_LIB/bridge.py" && -d "$DIAMOND_LIB/qml" ]] \
@@ -477,7 +478,7 @@ done
 # нет — сверка со staged-файлом в packages/ (тоже честная проверка:
 # пакет собран из него на шаге 6). Скрипты и Diamond — побайтовым
 # сравнением с src/.
-for spec in "xros-cli xros usr/local/bin/xros" "xros-installer xros-install-gui usr/local/bin/xros-install-gui"; do
+for spec in "xros-cli xros usr/local/bin/xros" "xros-installer xros-install-gui usr/local/bin/xros-install-gui" "xros-installer xros-installer-launcher usr/local/bin/xros-installer-launcher"; do
     read -r _pkg _bin _path <<< "$spec"
     _pkgfile="$(ls -t "$ROOT/packages/$_pkg"/"$_pkg"-*.pkg.tar.zst 2>/dev/null | head -1)"
     [[ -n "$_pkgfile" ]] || die "A-37: нет пакета $_pkg для сверки"

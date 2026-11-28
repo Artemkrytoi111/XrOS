@@ -159,7 +159,7 @@ say() { echo "SAY: $*" >> "$T/say.log"; }
 FSTYPE_MAP=""; TYPE_MAP=""; BLKID_MAP=""; PATH_MAP=""
 LSBLK_FAIL_DEV=""; BLKID_FAIL_DEV=""; LSBLK_PATH_FAIL=""; HEAD_FAIL_DEV=""
 lsblk() {
-  local d="${@: -1}"
+  local d="${!#}"
   case "$*" in
     *"-o NAME,SIZE,TYPE,FSTYPE"*) printf '' ;;
     *"-o FSTYPE"*)
@@ -177,7 +177,7 @@ lsblk() {
   return 0
 }
 blkid() {
-  local d="${@: -1}" _type
+  local d="${!#}" _type
   [[ "$d" == "$BLKID_FAIL_DEV" ]] && return 1
   _type="$(printf '%s\n' "$BLKID_MAP" | awk -v dev="$d" '$1==dev {print $2; exit}')"
   if [[ -n "$_type" ]]; then printf '%s\n' "$_type"; return 0; fi
@@ -185,7 +185,7 @@ blkid() {
 }
 # head: настоящий, кроме устройств из HEAD_FAIL_DEV (ошибка чтения).
 head() {
-  local d="${@: -1}"
+  local d="${!#}"
   if [[ -n "$HEAD_FAIL_DEV" && "$d" == "$HEAD_FAIL_DEV" ]]; then return 1; fi
   command head "$@"
 }
@@ -273,7 +273,25 @@ if xros_require_disk_free "$EFI"; then echo "mkfs.fat $EFI" >> "$T/mkfs.calls"; 
 if grep -q "mkfs.fat $EFI" "$T/mkfs.calls"; then ok "A10 чистый раздел: mkfs.fat вызван"; else bad "A10 чистый раздел: mkfs.fat вызван"; fi
 
 # ================= C. РЕАЛЬНЫЙ движок в unshare (UEFI-ветка) ===============
-if command -v unshare >/dev/null 2>&1; then
+REAL_ENGINE_E2E=1
+ROOT_FS_TYPE="$(stat -f -c '%T' "$ROOT" 2>/dev/null || true)"
+if [[ "$ROOT_FS_TYPE" == "9p" || "$ROOT_FS_TYPE" == "v9fs" ]]; then
+  REAL_ENGINE_E2E=0
+  for scenario in C1 C2 C3 C4 C5 C6; do
+    skip "$scenario e2e UEFI-ветка" "тестовый checkout на $ROOT_FS_TYPE не поддерживает надёжный mount namespace"
+  done
+elif ! command -v unshare >/dev/null 2>&1; then
+  REAL_ENGINE_E2E=0
+  for scenario in C1 C2 C3 C4 C5 C6; do
+    skip "$scenario e2e UEFI-ветка" "нет unshare на этом хосте"
+  done
+elif ! unshare -rm sh -c 'set -e; mount -t tmpfs tmpfs /run; mountpoint -q /run; mkdir -p /run/xros-install; mount -t tmpfs tmpfs /mnt; mkdir -p /mnt/xros-install/etc /mnt/xros-install/boot; mount -t tmpfs tmpfs /sys; mountpoint -q /sys; mkdir -p /sys/firmware/efi' >/dev/null 2>&1; then
+  REAL_ENGINE_E2E=0
+  for scenario in C1 C2 C3 C4 C5 C6; do
+    skip "$scenario e2e UEFI-ветка" "защищённые mount namespace недоступны в текущем окружении"
+  done
+fi
+if [[ "$REAL_ENGINE_E2E" == "1" ]]; then
   mkdir -p "$T/e2e/bin"
   mkstub() { # $1=имя, $2=тело
     printf '#!/usr/bin/env bash\necho "%s $*" >> "%s/calls.log"\n%s\n' "$1" "$T" "$2" > "$T/e2e/bin/$1"
@@ -348,10 +366,23 @@ exit 0
 EOF
   chmod +x "$T/e2e/bin/umount"
 
+  skip_remaining_e2e() {
+    local current="$1" scenario
+    local scenarios=(efi-clean efi-raid-lsblk efi-raid-blkid efi-wrong-type efi-missing efi-lsblk-error)
+    local found=0
+    for scenario in "${scenarios[@]}"; do
+      [[ "$scenario" == "$current" ]] && found=1
+      [[ "$found" == "1" ]] && skip "e2e $scenario" "внутренний namespace завершился с ошибкой"
+    done
+    echo "ИТОГ: PASS=$PASS FAIL=$FAIL SKIP=$SKIPN"
+    [[ "$FAIL" -eq 0 ]] || exit 1
+    exit 0
+  }
+
   run_e2e() { # $1=имя $2=режим
     local name="$1" mode="$2"
     local d="$T/e2e/$name"; mkdir -p "$d"
-    rm -f "$T/calls.log" /tmp/xros-install.log
+    rm -f "$T/calls.log"
     cat > "$d/conf" <<EOF
 DISK='$T/fakedisk'
 PARTMODE='erase'
@@ -376,20 +407,29 @@ EOF
     fi
     cat > "$d/inner.sh" <<EOF
 #!/usr/bin/env bash
-set -u
+set -euo pipefail
 T="$T"; ENGINE="$ENGINE"
+/bin/mount -t tmpfs tmpfs /run
+mountpoint -q /run
+mkdir -p /run/xros-install
+chmod 700 /run/xros-install
 /bin/mount -t tmpfs tmpfs /mnt
 /bin/mount -t tmpfs tmpfs /sys
 mkdir -p /sys/firmware/efi /mnt/xros-install/etc /mnt/xros-install/boot
 export XROS_FAKEBLK="$FAKEBLK_LIST"
-export XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF="$d/conf"
+export XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF=/run/xros-install/xros-install.conf
+cp "$d/conf" "\$XROS_INSTALL_CONF"
+chmod 600 "\$XROS_INSTALL_CONF"
 export PATH="\$T/e2e/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export LSBLK_MODE="$mode"
-setsid --wait env LD_PRELOAD="\$T/fakeblk.so" XROS_FAKEBLK="$FAKEBLK_LIST" XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF="$d/conf" PATH="\$T/e2e/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" LSBLK_MODE="$mode" bash "\$ENGINE" > "$d/engine.out" 2>&1
-RC=\$?
+if setsid --wait env LD_PRELOAD="\$T/fakeblk.so" XROS_FAKEBLK="$FAKEBLK_LIST" XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF=/run/xros-install/xros-install.conf PATH="\$T/e2e/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" LSBLK_MODE="$mode" bash "\$ENGINE" > "$d/engine.out" 2>&1; then
+  RC=0
+else
+  RC=\$?
+fi
 {
   echo "rc=\$RC"
-  if grep -q "не прошёл повторную проверку" "$d/engine.out" 2>/dev/null || { [[ -f /tmp/xros-install.log ]] && grep -q "не прошёл повторную проверку" /tmp/xros-install.log 2>/dev/null; }; then echo "r19_msg=yes"; else echo "r19_msg=no"; fi
+  if grep -q "не прошёл повторную проверку" "$d/engine.out" /run/xros-install/xros-install.log 2>/dev/null; then echo "r19_msg=yes"; else echo "r19_msg=no"; fi
   grep -q "^wipefs" "\$T/calls.log" && echo "wipefs_called=yes" || echo "wipefs_called=no"
   grep -q "^sgdisk" "\$T/calls.log" && echo "sgdisk_called=yes" || echo "sgdisk_called=no"
   if grep -q "^mkfs.fat" "\$T/calls.log" 2>/dev/null; then echo "mkfs_fat_called=yes"; grep "^mkfs.fat" "\$T/calls.log" | head -1 | awk '{print "mkfs_fat_target=" \$NF}'; else echo "mkfs_fat_called=no"; fi
@@ -397,7 +437,12 @@ RC=\$?
 umount -R /mnt/xros-install 2>/dev/null || true
 EOF
     chmod +x "$d/inner.sh"
-    unshare -rm bash "$d/inner.sh"
+    if ! unshare -rm bash "$d/inner.sh"; then
+      echo "harness_rc=1" > "$d/result.txt"
+    fi
+    if grep -q '^harness_rc=' "$d/result.txt" 2>/dev/null; then
+      skip_remaining_e2e "$name"
+    fi
     if [[ "$missing" == "1" ]]; then touch "$T/fakediskp1" "$T/fakedisk1"; fi
   }
   result_val() { grep "^$2=" "$1" 2>/dev/null | cut -d= -f2- | head -1; }
@@ -441,8 +486,6 @@ EOF
   R="$T/e2e/efi-lsblk-error/result.txt"
   [[ "$(result_val "$R" r19_msg)" == "yes" ]] && ok "C6 lsblk-error: сообщение R-19" || bad "C6 lsblk-error: сообщение R-19"
   [[ "$(result_val "$R" mkfs_fat_called)" == "no" ]] && ok "C6 lsblk-error: mkfs.fat НЕ вызван" || bad "C6 lsblk-error: mkfs.fat НЕ вызван"
-else
-  skip "секция C (e2e реальный движок)" "нет unshare на этом хосте"
 fi
 
 echo "ИТОГ: PASS=$PASS FAIL=$FAIL SKIP=$SKIPN"

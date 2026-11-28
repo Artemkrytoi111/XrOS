@@ -3,11 +3,12 @@
 
 Мост между QML-интерфейсом и bash-движком src/xros-install.
 Контракт с движком — как у старого GUI (xros-install-gui-rs):
-  * конфиг: /tmp/xros-install.conf (0600, shell-экранирование)
+  * конфиг: /run/xros-install/xros-install.conf (0600, shell-экранирование)
   * запуск: /usr/local/bin/xros-install, XROS_NONINTERACTIVE=1,
-    XROS_INSTALL_CONF=/tmp/xros-install.conf
-  * лог: /tmp/xros-install.log (читается построчно)
+    XROS_INSTALL_CONF=/run/xros-install/xros-install.conf
+  * лог: /run/xros-install/xros-install.log (читается построчно)
 """
+import ctypes
 import json
 import os
 import errno
@@ -19,15 +20,16 @@ import time
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
 
-CONF_PATH = "/tmp/xros-install.conf"
-LOG_PATH = "/tmp/xros-install.log"
+RUNTIME_DIR = "/run/xros-install"
+CONF_PATH = f"{RUNTIME_DIR}/xros-install.conf"
+LOG_PATH = f"{RUNTIME_DIR}/xros-install.log"
 ENGINE = "/usr/local/bin/xros-install"
 
 # Переменные окружения, передаваемые движку установки (работает от root).
 # Остальное (PYTHONPATH, QT_*, QML2_*, LD_LIBRARY_PATH) не передаётся:
 # иначе можно подсунуть root-процессу свои плагины/библиотеки.
 SAFE_ENV_KEYS = frozenset({
-    "PATH", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES",
+    "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES",
     "DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "XAUTHORITY",
     "DBUS_SESSION_BUS_ADDRESS", "XDG_SESSION_TYPE", "XDG_SESSION_DESKTOP",
     "XROS_NONINTERACTIVE", "XROS_INSTALL_CONF",
@@ -35,12 +37,33 @@ SAFE_ENV_KEYS = frozenset({
 
 
 def safe_env() -> dict[str, str]:
-    env = {}
-    for k in SAFE_ENV_KEYS:
+    env = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/bin"}
+    for k in SAFE_ENV_KEYS - {"XROS_INSTALL_CONF"}:
         v = os.environ.get(k)
         if v is not None:
             env[k] = v
     return env
+
+
+def _arm_child_parent_death(parent_pid: int):
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(1, signal.SIGTERM) != 0 or os.getppid() != parent_pid:
+        raise OSError(ctypes.get_errno() or errno.ESRCH, "parent is gone")
+
+
+def _ensure_runtime_dir() -> bool:
+    try:
+        st = os.lstat(RUNTIME_DIR)
+    except FileNotFoundError:
+        try:
+            os.mkdir(RUNTIME_DIR, 0o700)
+            st = os.lstat(RUNTIME_DIR)
+        except OSError:
+            return False
+    except OSError:
+        return False
+    return stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode) \
+        and st.st_uid == 0 and stat.S_IMODE(st.st_mode) == 0o700
 
 
 # Зарезервированные системные имена (A-31, тот же список, что
@@ -121,36 +144,23 @@ def _device_readable(path: str) -> bool:
 
 
 def _secure_create(path: str):
-    """Безопасное создание файла (A-13): O_CREAT|O_EXCL, 0o600.
-    O_CREAT|O_EXCL не следует по symlink'ам (POSIX: open() с O_EXCL
-    падает, если путь — существующий symlink), поэтому при первом
-    создании symlink'у в /tmp файл не подменят. Если файл уже
-    существует (остаток упавшего запуска), он проверяется через
-    lstat и удаляется: только обычный файл или сам symlink (цель
-    symlink НЕ затрагивается); FIFO/блочные устройства не трогаем.
-    Повторное создание снова атомарное. Возвращает fd или None."""
-    try:
-        return os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        pass
-    except OSError:
-        return None
-    # Файл уже существует — безопасная очистка.
+    """Создать обычный файл, не следуя symlink; чужие типы не трогаются."""
     try:
         st = os.lstat(path)
-        if stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode):
-            os.unlink(path)
-        else:
-            # FIFO, сокет, каталог — не наше; не трогаем.
-            return None
     except FileNotFoundError:
-        pass  # между проверкой и удалением файл исчез — норм
+        st = None
     except OSError:
         return None
+    if st is not None:
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+            return None
+        try:
+            os.unlink(path)
+        except OSError:
+            return None
     try:
-        return os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        return os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), 0o600)
     except OSError:
-        # Кто-то успел занять имя снова (гонка) — отказ, а не зацикливание.
         return None
 
 
@@ -326,10 +336,11 @@ class InstallerBridge(QObject):
         if not keymap.replace("-", "").replace("_", "").isalnum():
             return False
         try:
-            subprocess.run(["setxkbmap", keymap],
-                           stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, timeout=5)
-            return True
+            completed = subprocess.run(["setxkbmap", keymap],
+                                       stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL, timeout=5,
+                                       check=False)
+            return completed.returncode == 0
         except Exception:
             return False
 
@@ -360,14 +371,13 @@ class InstallerBridge(QObject):
             if value == "":
                 continue
             # Запрет на перенос строки: значение иначе добавит новую пару
-            # KEY=VALUE в конфиг и подменит параметры установки. Движок
-            # конфиг СОРСИТ (. "$CONF"), поэтому перевод строки — это
-            # исполнение чужого кода от root.
+            # KEY=VALUE в конфиг и подменит параметры установки.
             if "\n" in value or "\r" in value:
                 return False
             lines.append(f"{key}={_shell_quote(value)}")
-        # A-13: безопасное создание (unlink + O_EXCL, 0o600) вместо
-        # open("w") + chmod: старый путь следовал по symlink'у.
+        if not _ensure_runtime_dir():
+            return False
+        # A-13: безопасное создание через O_NOFOLLOW|O_EXCL.
         fd = _secure_create(CONF_PATH)
         if fd is None:
             return False
@@ -376,13 +386,17 @@ class InstallerBridge(QObject):
                 f.write("\n".join(lines) + "\n")
             return True
         except Exception:
+            try:
+                os.unlink(CONF_PATH)
+            except OSError:
+                pass
             return False
 
     @pyqtSlot(result=bool)
     def startInstall(self) -> bool:
         if self._proc is not None and self._proc.poll() is None:
             return False
-        if not os.path.exists(CONF_PATH):
+        if not _ensure_runtime_dir() or not os.path.isfile(CONF_PATH) or os.path.islink(CONF_PATH):
             return False
         # A-13: лог — тоже через безопасное создание (как конфиг).
         # Неудача — честный отказ запускать движок без журнала.
@@ -394,10 +408,12 @@ class InstallerBridge(QObject):
         env = safe_env()
         env["XROS_NONINTERACTIVE"] = "1"
         env["XROS_INSTALL_CONF"] = CONF_PATH
+        parent_pid = os.getpid()
         try:
             self._proc = subprocess.Popen(
                 [ENGINE], env=env, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, start_new_session=True)
+                stderr=subprocess.DEVNULL, start_new_session=True,
+                preexec_fn=lambda: _arm_child_parent_death(parent_pid))
         except Exception:
             try:
                 os.remove(CONF_PATH)

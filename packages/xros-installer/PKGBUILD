@@ -1,3 +1,5 @@
+# shellcheck shell=bash
+# shellcheck disable=SC2034,SC2154
 # XrOS — пакет xros-installer: консольный и графический установщики.
 # Графический бинарь собран заранее из src/xros-install-gui-rs
 # (cargo build --release --offline в chroot сборки: кэш cargo с eframe
@@ -7,8 +9,8 @@
 # src/xros-install-gui-rs, а в пакете — собранный из них бинарь.
 # Файлы-источники лежат РЯДОМ с PKGBUILD:
 # их кладёт туда этап сборки (scripts/build.sh) из актуальных
-# исходников; prepare() ниже проверяет, что копии свежие, и роняет
-# сборку, если исходник новее staged-файла.
+# исходников; prepare() ниже проверяет, что копии и fingerprint свежие,
+# и роняет сборку при рассинхроне.
 
 pkgname=xros-installer
 pkgver=1.0
@@ -22,9 +24,11 @@ depends=('bash' 'dialog' 'rsync' 'parted' 'dosfstools' 'e2fsprogs' 'btrfs-progs'
          'xros-branding')
 options=('!debug' '!strip')
 source=('xros-install'
-        'xros-install-gui')
+        'xros-install-gui'
+         'xros-installer-launcher')
 sha256sums=('47ca723225161a370168793c9b47b5e49a10e9b361cc282a63e5ff8df1daa50b'
-            'cf3cdd2e729580b318b6e0a6511f5eb700e76395dcf7aa073315de140545cb8c')
+            'cf3cdd2e729580b318b6e0a6511f5eb700e76395dcf7aa073315de140545cb8c'
+             '2ea2a2b50edeb553aceb441d12afef402eee1e0d1287c9332b77c70ec9e1fb4b')
 # Diamond (каталог, НЕ в source=): makepkg не умеет каталог как источник
 # («not found in the build directory») — staged-каталог лежит рядом
 # с PKGBUILD, prepare()/package() обращаются к нему через $startdir.
@@ -35,9 +39,12 @@ prepare() {
     error "xros-install отличается от src/xros-install: обновите staged-копию (см. scripts/build.sh, этап 2)"
     exit 1
   fi
-  # Графический бинарь: ни один исходник не должен быть новее бинаря.
-  if [[ -n $(find "$startdir/../../src/xros-install-gui-rs" -type f -newer "$srcdir/xros-install-gui" -print -quit) ]]; then
-    error "xros-install-gui старше исходников src/xros-install-gui-rs: пересоберите бинарь (cargo build --release --offline)"
+  # Графический бинарь: sidecar фиксирует точный набор исходников сборки.
+  local gui_src_sha gui_recorded_sha
+  gui_src_sha="$(cd "$startdir/../../src/xros-install-gui-rs" && sha256sum Cargo.toml Cargo.lock src/*.rs | sort -k2 | sha256sum | cut -d' ' -f1)"
+  gui_recorded_sha="$(head -1 "$startdir/xros-install-gui.sha256" 2>/dev/null)"
+  if [[ -z "$gui_recorded_sha" || "$gui_src_sha" != "$gui_recorded_sha" ]]; then
+    error "xros-install-gui.sha256 не совпадает с исходниками src/xros-install-gui-rs: пересоберите бинарь (cargo build --release --offline)"
     exit 1
   fi
   # Diamond: staged-копия обязана совпадать с src/xros-installer-diamond.
@@ -51,6 +58,7 @@ prepare() {
 package() {
   install -Dm755 xros-install "$pkgdir/usr/local/bin/xros-install"
   install -Dm755 xros-install-gui "$pkgdir/usr/local/bin/xros-install-gui"
+  install -Dm755 xros-installer-launcher "$pkgdir/usr/local/bin/xros-installer-launcher"
   # Diamond (QML): лаунчер + приложение (каталог рядом с PKGBUILD).
   # Файлы ставятся по одному явным install с буквальным $pkgdir:
   # диагностика (19) сверяет список файлов пакета с package() по тексту,

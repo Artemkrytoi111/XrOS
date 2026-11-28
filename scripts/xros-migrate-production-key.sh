@@ -2,7 +2,8 @@
 # XrOS — Атомарная миграция production GPG-ключа (шаблон, НЕ выполнять без отдельного разрешения владельца).
 #
 # Назначение: безопасно заменить 7 production-подписей, публичный ключ и
-# fingerprint со старого ключа (B16629E8…) на новый (9E71EDB1…).
+# fingerprint со старого ключа (B16629E8…) на новый (52F96353…).
+# Новый ключ бессрочный: offline master + отдельный online signing subkey.
 #
 # Принципы (Фаза 4.5 §2, Фаза 5D):
 #   - set -e НЕ является атомарной транзакцией. Используются отдельные
@@ -17,7 +18,7 @@
 #   3. Решение владельца о переключении подписей.
 #   4. Наличие 7 новых БИНАРНЫХ (dearmored) .sig от нового ключа
 #      (armored .sig от Carolyn НЕ подходят для pacman — см. Фазу 5 §6).
-#   5. Наличие нового публичного ключа (проверен 9/9 в Фазе 3).
+#   5. Наличие нового публичного ключа (offline master и online subkey проверены локально).
 #
 # Использование (только после разрешения):
 #   sudo bash scripts/xros-migrate-production-key.sh \
@@ -31,7 +32,7 @@
 set -u -o pipefail
 
 OLD_FPR="B16629E8B17270764AED33013D1718A6EE45C94C"
-NEW_FPR="9E71EDB1A341779B7F0B99EAD1A3963AA4E45CEB"
+NEW_FPR="52F963537CCD76C941B4DFD7B0DD24EE45116C8A"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_DIR="${REPO_ROOT}/repo/xros/os/x86_64"
 SNAP_DIR="${REPO_ROOT}/profile/airootfs/usr/share/xros/repo/xros/os/x86_64"
@@ -123,7 +124,11 @@ cp -a "${SNAP_DIR}/xros.db.sig" "${BACKUP}/snapshot/" 2>/dev/null || true
 cp -a "${SNAP_DIR}/xros.files.sig" "${BACKUP}/snapshot/" 2>/dev/null || true
 for f in "${PUBKEY_FILES[@]}"; do cp -a "$f" "${BACKUP}/pubkey/" || fail "backup: нет $f"; done
 for f in "${FPR_FILES[@]}"; do cp -a "$f" "${BACKUP}/configs/" || fail "backup: нет $f"; done
-( cd "$BACKUP" && sha256sum $(find . -type f ! -name SHA256SUMS | sort) > SHA256SUMS )
+(
+  cd "$BACKUP" || exit
+  mapfile -d '' files < <(find . -type f ! -name SHA256SUMS -print0 | sort -z)
+  sha256sum "${files[@]}" > SHA256SUMS
+)
 sha256sum -c "${BACKUP}/SHA256SUMS" >/dev/null || fail "backup: проверка SHA256SUMS не прошла"
 log "Backup создан: ${BACKUP} (SHA256SUMS OK)"
 echo "Backup: ${BACKUP}" >> "$JOURNAL"

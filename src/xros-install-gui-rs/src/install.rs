@@ -5,14 +5,16 @@
 
 use crate::app::{Choices, PartMode};
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
 pub const INSTALLER: &str = "/usr/local/bin/xros-install";
-pub const CONF: &str = "/tmp/xros-install.conf";
-pub const LOGFILE: &str = "/tmp/xros-install.log";
+pub const RUNTIME_DIR: &str = "/run/xros-install";
+pub const CONF: &str = "/run/xros-install/xros-install.conf";
+pub const LOGFILE: &str = "/run/xros-install/xros-install.log";
 
 // Сколько ждём, пока движок сам завершится после SIGTERM группе,
 // прежде чем добить группу SIGKILL (cleanup: размонтирование и т.п.).
@@ -130,10 +132,9 @@ pub fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-// Валидация одного значения конфига: движок (src/xros-install) конфиг
-// ИСПОЛНЯЕТ (set -a; . "$CONF"), поэтому перевод строки в значении —
-// это лишняя строка/команда, выполняемая от root. Пустые значения
-// допустимы (режим erase не передаёт ROOT_PART/EFI_PART).
+// Валидация одного значения конфига: движок разбирает конфиг как данные,
+// поэтому перевод строки не должен добавлять новую пару параметров.
+// Пустые значения допустимы (режим erase не передаёт ROOT_PART/EFI_PART).
 pub fn validate_conf_value(key: &str, value: &str) -> std::io::Result<()> {
     if value.contains('\n') || value.contains('\r') {
         return Err(std::io::Error::new(
@@ -144,7 +145,32 @@ pub fn validate_conf_value(key: &str, value: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+fn ensure_runtime_dir() -> std::io::Result<()> {
+    let metadata = std::fs::symlink_metadata(RUNTIME_DIR);
+    match metadata {
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "unsafe runtime directory",
+            ));
+        }
+        Ok(meta) if meta.uid() != 0 || meta.mode() & 0o777 != 0o700 => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "unsafe runtime directory",
+            ));
+        }
+        Ok(_) => return Ok(()),
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        Err(_) => {}
+    }
+    std::fs::create_dir(RUNTIME_DIR)?;
+    std::fs::set_permissions(RUNTIME_DIR, std::fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
 pub fn write_conf(sel: &Choices) -> std::io::Result<()> {
+    ensure_runtime_dir()?;
     let rootpass = if sel.same_admin_pass {
         sel.userpass.clone()
     } else {
@@ -165,41 +191,59 @@ pub fn write_conf(sel: &Choices) -> std::io::Result<()> {
         ("USERNAME", sel.username.clone()),
         ("USERPASS", sel.userpass.clone()),
         ("ROOTPASS", rootpass),
-        ("AUTOLOGIN", if sel.autologin { "1" } else { "0" }.to_string()),
+        (
+            "AUTOLOGIN",
+            if sel.autologin { "1" } else { "0" }.to_string(),
+        ),
         ("TIMEZONE", sel.timezone.clone()),
         ("KEYMAP", sel.keymap.clone()),
         ("DE", sel.de.clone()),
         ("OFFICE", sel.office.clone()),
     ];
-    // Валидация значений ДО создания файла конфига:
-    // движок (src/xros-install) конфиг ИСПОЛНЯЕТ (set -a; . "$CONF"),
-    // поэтому перевод строки в значении — это лишняя строка/команда,
-    // выполняемая от root. Пустые значения допустимы (режим erase
-    // не передаёт ROOT_PART/EFI_PART).
+    // Валидация значений до создания файла конфигурации.
+    // Пустые значения допустимы (режим erase не передаёт ROOT_PART/EFI_PART).
     for (k, v) in &vals {
         validate_conf_value(k, v)?;
     }
-    // 600 — с момента создания: File::create дал бы 644 на время записи,
-    // а в конфиге — оба пароля. OpenOptionsExt::mode действует только
-    // при создании, поэтому set_permissions оставляем для уже
-    // существующего файла с чужими правами.
-    // Убираем заранее созданный файл/симлинк: иначе OpenOptions
-    // пошёл бы по симлинку (чужие права/цель), а leftover от прошлого
-    // упавшего запуска содержал бы старые пароли.
-    let _ = std::fs::remove_file(CONF);
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(CONF)?;
-    for (k, v) in vals {
-        writeln!(f, "{k}={}", shell_quote(&v))?;
+    // 600 действует с момента создания, потому что конфиг содержит пароли;
+    // перед записью проверяем тип старого файла и отклоняем symlink.
+    match std::fs::symlink_metadata(CONF) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "unsafe config symlink",
+            ));
+        }
+        Ok(meta) if meta.is_file() => {
+            std::fs::remove_file(CONF)?;
+        }
+        Ok(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "unsafe config file",
+            ));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
     }
-    drop(f);
-    // Файл уже создан с mode=0o600, но на всякий случай убеждаемся
-    std::fs::set_permissions(CONF, std::fs::Permissions::from_mode(0o600))?;
-    Ok(())
+    let result = (|| {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(CONF)?;
+        for (k, v) in vals {
+            writeln!(f, "{k}={}", shell_quote(&v))?;
+        }
+        f.flush()?;
+        std::fs::set_permissions(CONF, std::fs::Permissions::from_mode(0o600))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(CONF);
+    }
+    result
 }
 
 pub fn start_install(
@@ -356,7 +400,12 @@ mod tests {
 
     #[test]
     fn validate_rejects_newline_and_cr() {
-        for bad in ["a\nb", "a\rb", "DISK=/dev/sda\nDISK2=/dev/sdb", "x\n# comment"] {
+        for bad in [
+            "a\nb",
+            "a\rb",
+            "DISK=/dev/sda\nDISK2=/dev/sdb",
+            "x\n# comment",
+        ] {
             assert!(
                 validate_conf_value("TEST", bad).is_err(),
                 "{bad:?} должно отклоняться (инъекция строки)"
@@ -366,7 +415,14 @@ mod tests {
 
     #[test]
     fn validate_accepts_normal_values() {
-        for ok in ["/dev/sda", "ext4", "my-host", "pass with spaces", "pass'with'quotes", ""] {
+        for ok in [
+            "/dev/sda",
+            "ext4",
+            "my-host",
+            "pass with spaces",
+            "pass'with'quotes",
+            "",
+        ] {
             assert!(
                 validate_conf_value("TEST", ok).is_ok(),
                 "{ok:?} должно приниматься"
@@ -379,17 +435,36 @@ mod tests {
         // Значения, опасные для shell, после экранирования не несут
         // ни одной ОТКРЫТОЙ одинарной кавычки (каждая заэкранирована
         // как '\'). Это гарантия, что строка конфига — одно слово.
-        for v in ["", "abc", "a'b", "'", "''", "$(reboot)", "`reboot`", "a b c", "ru ru"] {
+        // Проверяем реальную POSIX shell-семантику: экранированное значение
+        // должно остаться одним аргументом и восстановиться без выполнения
+        // подстановок команд.
+        for v in [
+            "",
+            "abc",
+            "a'b",
+            "'",
+            "''",
+            "$(reboot)",
+            "`reboot`",
+            "a b c",
+            "ru ru",
+        ] {
             let q = shell_quote(v);
-            let inner = &q[1..q.len() - 1];
-            let mut chars = inner.chars();
-            while let Some(c) = chars.next() {
-                if c == '\'' {
-                    assert!(matches!(chars.next(), Some('\\')),
-                        "открытая кавычка в {v:?}: {q}");
-                }
-            }
-            assert_eq!(q.chars().count(), 2 + inner.chars().count());
+            let script = format!("set -- {q}; [ \"$#\" -eq 1 ] || exit 2; printf '%s' \"$1\"");
+            let output = Command::new("sh")
+                .arg("-c")
+                .arg(script)
+                .output()
+                .expect("запуск sh для проверки shell_quote");
+            assert!(
+                output.status.success(),
+                "значение разбилось на слова: {v:?}: {q}"
+            );
+            assert_eq!(
+                output.stdout,
+                v.as_bytes(),
+                "изменилось значение: {v:?}: {q}"
+            );
         }
     }
 }

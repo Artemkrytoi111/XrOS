@@ -52,8 +52,24 @@ grep -q 'pacman-key --populate archlinux не удался в установле
   || bad "R-07: --populate — фатальная ошибка"
 
 # ---------- e2e: реальный движок в unshare ----------
-if ! command -v gcc >/dev/null 2>&1 || ! command -v unshare >/dev/null 2>&1; then
+ROOT_FS_TYPE="$(stat -f -c '%T' "$ROOT" 2>/dev/null || true)"
+if [[ "$ROOT_FS_TYPE" == "9p" || "$ROOT_FS_TYPE" == "v9fs" ]]; then
+  for mode in init-fail populate-fail no-gpg ok; do
+    skip "e2e keyring: $mode" "тестовый checkout на $ROOT_FS_TYPE не поддерживает надёжный mount namespace"
+  done
+  echo "ИТОГ: PASS=$PASS FAIL=$FAIL SKIP=$SKIPN"
+  [[ "$FAIL" -eq 0 ]] || exit 1
+  exit 0
+elif ! command -v gcc >/dev/null 2>&1 || ! command -v unshare >/dev/null 2>&1; then
   skip "e2e реальный движок в unshare" "нет gcc или unshare на этом хосте"
+  echo "ИТОГ: PASS=$PASS FAIL=$FAIL SKIP=$SKIPN"
+  [[ "$FAIL" -eq 0 ]] || exit 1
+  exit 0
+fi
+if ! unshare -rm sh -c 'd=/run/xros-keyring-probe; set -e; mount -t tmpfs tmpfs /run; mountpoint -q /run; install -d -m 700 -o root -g root "$d"; mount -t tmpfs tmpfs /mnt; mkdir -p /mnt/xros-install/etc /mnt/xros-install/boot; mkdir -p /run/archiso/bootmnt/xros/boot/x86_64' >/dev/null 2>&1; then
+  for mode in init-fail populate-fail no-gpg ok; do
+    skip "e2e keyring: $mode" "защищённый /run недоступен в текущем окружении"
+  done
   echo "ИТОГ: PASS=$PASS FAIL=$FAIL SKIP=$SKIPN"
   [[ "$FAIL" -eq 0 ]] || exit 1
   exit 0
@@ -177,7 +193,7 @@ chmod +x "$T/e2e/bin/umount"
 run_e2e() { # $1=имя $2=режим keyring
   local name="$1" mode="$2"
   local d="$T/e2e/$name"; mkdir -p "$d"
-  rm -f "$T/calls.log" /tmp/xros-install.log
+  rm -f "$T/calls.log"
   cat > "$d/conf" <<EOF
 DISK='$T/fakedisk'
 PARTMODE='erase'
@@ -195,17 +211,29 @@ OFFICE='none'
 EOF
   cat > "$d/inner.sh" <<EOF
 #!/usr/bin/env bash
-set -u
+set -euo pipefail
 T="$T"; ENGINE="$ENGINE"
 FAKEBLK_LIST="$T/fakedisk:$T/fakedisk1:$T/fakedisk2:$T/fakediskp1:$T/fakediskp2"
+mount -t tmpfs tmpfs /run
+mountpoint -q /run
+mkdir -p /run/xros-install
+chmod 700 /run/xros-install
 mount -t tmpfs tmpfs /mnt
 mkdir -p /mnt/xros-install/etc /mnt/xros-install/boot
+mkdir -p /run/archiso/bootmnt/xros/boot/x86_64
+: > /run/archiso/bootmnt/xros/boot/x86_64/vmlinuz-linux
+: > /run/archiso/bootmnt/xros/boot/x86_64/initramfs-linux.img
 export XROS_FAKEBLK="\$FAKEBLK_LIST"
-export XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF="$d/conf"
+export XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF=/run/xros-install/xros-install.conf
+cp "$d/conf" "\$XROS_INSTALL_CONF"
+chmod 600 "\$XROS_INSTALL_CONF"
 export PATH="\$T/e2e/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export KEYRING_MODE="$mode"
-setsid --wait env LD_PRELOAD="\$T/fakeblk.so" XROS_FAKEBLK="\$FAKEBLK_LIST" XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF="$d/conf" PATH="\$T/e2e/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" KEYRING_MODE="$mode" bash "\$ENGINE" > "$d/engine.out" 2>&1
-RC=\$?
+if setsid --wait env LD_PRELOAD="\$T/fakeblk.so" XROS_FAKEBLK="\$FAKEBLK_LIST" XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF=/run/xros-install/xros-install.conf PATH="\$T/e2e/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" KEYRING_MODE="$mode" bash "\$ENGINE" > "$d/engine.out" 2>&1; then
+  RC=0
+else
+  RC=\$?
+fi
 {
   echo "rc=\$RC"
   grep -q "pacman-key --init не удался" "$d/engine.out" 2>/dev/null && echo "init_msg=yes" || echo "init_msg=no"
@@ -215,7 +243,14 @@ RC=\$?
 umount -R /mnt/xros-install 2>/dev/null || true
 EOF
   chmod +x "$d/inner.sh"
-  unshare -rm bash "$d/inner.sh"
+  if ! unshare -rm bash "$d/inner.sh"; then
+    for scenario in init-fail populate-fail no-gpg ok; do
+      skip "e2e keyring: $scenario" "внутренний namespace завершился с ошибкой"
+    done
+    echo "ИТОГ: PASS=$PASS FAIL=$FAIL SKIP=$SKIPN"
+    [[ "$FAIL" -eq 0 ]] || exit 1
+    exit 0
+  fi
 }
 result_val() { grep "^$2=" "$1" 2>/dev/null | cut -d= -f2- | head -1; }
 

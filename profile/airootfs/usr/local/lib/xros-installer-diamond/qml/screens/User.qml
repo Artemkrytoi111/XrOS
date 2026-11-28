@@ -49,6 +49,10 @@ Item {
     function usernameOk() {
         return username !== "" && usernameError() === ""
     }
+    function hostnameValid() {
+        return /^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$/.test(hostname) &&
+               hostname.indexOf("..") < 0 && hostname.indexOf(".-") < 0 && hostname.indexOf("-.") < 0
+    }
     function validate() {
         // П.3 (XrOS 1.1): минимум пароля A-26 (8 символов) снят по
         // решению владельца — короткий пароль РАЗРЕШЁН, единообразно
@@ -58,7 +62,7 @@ Item {
         // Theme.warning) и НЕ блокирует переход.
         var rootOk = !separateRoot || (rootPass1.length > 0 && rootPass1 === rootPass2)
         return usernameOk() && pass1.length > 0 && pass1 === pass2 &&
-               hostname.length > 0 && rootOk
+               hostnameValid() && rootOk
     }
 
     function applyAll() {

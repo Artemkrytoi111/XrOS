@@ -201,12 +201,63 @@ grep -q "xros_on_exit()" "$ENGINE" && grep -q "trap xros_on_exit EXIT" "$ENGINE"
   && ok "T0f: EXIT-trap cleanup при ошибке во время установки" \
   || bad "T0f: EXIT-trap cleanup при ошибке во время установки"
 
-# T0g: симлинк-защита /tmp-файлов.
-grep -Fq '[[ -L "$LOG" ]] && rm -f "$LOG"' "$ENGINE" \
-  && grep -Fq 'rm -f /tmp/xros-de-result' "$ENGINE" \
-  && grep -q "remove_file(CONF)" "$GUI_INSTALL" \
-  && ok "T0g: LOG/CONF/de-result защищены от симлинков и stale-файлов" \
-  || bad "T0g: LOG/CONF/de-result защищены от симлинков и stale-файлов"
+# T0g: runtime-каталог и конфиг защищены от symlink/source-атак.
+grep -Fq 'RUNTIME_DIR="/run/xros-install"' "$ENGINE" \
+  && grep -Fq 'install -d -m 700 -o root -g root "$RUNTIME_DIR"' "$ENGINE" \
+  && grep -Fq 'xros_load_config()' "$ENGINE" \
+  && ! grep -Fq '. "$CONF"' "$ENGINE" \
+  && grep -Fq 'O_NOFOLLOW' "$GUI_INSTALL" \
+  && ok "T0g: runtime-каталог, конфиг и root-записи защищены" \
+  || bad "T0g: runtime-каталог, конфиг и root-записи защищены"
+
+# T0g2: parser treats shell-looking values as data and rejects syntax.
+PARSER_BLOCK="$T/parser-block.sh"
+awk '/^# --- XROS: безопасный парсер конфигурации \(начало\) ---/{f=1} f; /^# --- XROS: безопасный парсер конфигурации \(конец\) ---/{exit}' "$ENGINE" > "$PARSER_BLOCK"
+RUNTIME_DIR="$T/runtime"; mkdir -p "$RUNTIME_DIR"
+CONF="$RUNTIME_DIR/xros-install.conf"
+LOG="$T/parser.log"
+say() { printf '%s\n' "$*" >> "$LOG"; }
+# shellcheck disable=SC1090
+source "$PARSER_BLOCK"
+stat() {
+  if [[ "$1" == "-c" && "$2" == "%a" ]]; then printf '600\n'; else command stat "$@"; fi
+}
+printf "USERPASS='\$(touch %s/pwned)'\n" "$T" > "$CONF"
+chmod 600 "$CONF"
+expected="\$(touch $T/pwned)"
+if xros_load_config && [[ "$USERPASS" == "$expected" ]] && [[ ! -e "$T/pwned" ]]; then
+  ok "T0g2a: parser не выполняет shell-команды и сохраняет литерал"
+else
+  bad "T0g2a: parser не выполняет shell-команды и сохраняет литерал"
+fi
+printf "USERPASS='ok'; touch %s/pwned2\n" "$T" > "$CONF"
+chmod 600 "$CONF"
+if ! xros_load_config; then
+  ok "T0g2b: shell-синтаксис в значении отклоняется"
+else
+  bad "T0g2b: shell-синтаксис в значении отклоняется"
+fi
+printf "UNKNOWN='value'\n" > "$CONF"
+chmod 600 "$CONF"
+if ! xros_load_config; then
+  ok "T0g2c: неизвестный ключ отклоняется"
+else
+  bad "T0g2c: неизвестный ключ отклоняется"
+fi
+printf "USERPASS='one'\nUSERPASS='two'\n" > "$CONF"
+chmod 600 "$CONF"
+if ! xros_load_config; then
+  ok "T0g2d: дублированный ключ отклоняется"
+else
+  bad "T0g2d: дублированный ключ отклоняется"
+fi
+printf "USERPASS=plain\n" > "$CONF"
+chmod 600 "$CONF"
+if ! xros_load_config; then
+  ok "T0g2e: malformed строка отклоняется"
+else
+  bad "T0g2e: malformed строка отклоняется"
+fi
 
 # T0h: пароли не попадают в журнал.
 if grep -Eq 'say ".*(USERPASS|ROOTPASS|userpass|rootpass)' "$ENGINE" "$GUI_INSTALL" "$GUI_APP"; then
@@ -407,11 +458,14 @@ set -u
 TARGET="$1"; LOG="$2"; MODE="$3"
 export PATH="$4:$PATH"
 NONINTERACTIVE=1
-mkdir -p "$TARGET"
+RUNTIME_DIR="$(dirname "$LOG")/runtime"
+CONF="$RUNTIME_DIR/xros-install.conf"
+DE_RESULT_FILE="$RUNTIME_DIR/xros-de-result"
+mkdir -p "$TARGET" "$RUNTIME_DIR"
 say() { printf '%s\n' "[harness] $*" >> "$LOG"; }
 # shellcheck disable=SC1090
 source "$5"
-touch /tmp/xros-de-result /tmp/xros-install.conf
+touch "$DE_RESULT_FILE" "$CONF"
 if [[ "$MODE" == "fail" ]]; then
   XROS_INSTALLING=1
   exit 1
@@ -427,7 +481,7 @@ bash "$T/t4.sh" "$T/t4-target" "$T/t4-fail.log" fail "$T/bin" "$CHILD_BLOCK" > "
 rc=$?
 if [[ "$rc" == "1" ]] && grep -q "Очистка завершена" "$T/t4-fail.log" \
   && grep -q "umount -R $T/t4-target" "$T/umount.calls" 2>/dev/null \
-  && [[ ! -f /tmp/xros-de-result && ! -f /tmp/xros-install.conf ]]; then
+  && [[ ! -f "$T/runtime/xros-de-result" && ! -f "$T/runtime/xros-install.conf" ]]; then
   ok "T4a: exit 1 во время установки — cleanup (umount + удаление временных файлов + журнал)"
 else
   bad "T4a: exit 1 во время установки — cleanup (rc=$rc)"
@@ -475,6 +529,44 @@ fi
 [[ "$t5_fail" == "0" ]] \
   && ok "T5: санитизация HOSTNAME/USERNAME/TIMEZONE/KEYMAP (точные выражения)" \
   || bad "T5: санитизация HOSTNAME/USERNAME/TIMEZONE/KEYMAP (точные выражения)"
+
+# T6: GUI/CLI contracts from Task 3.
+GUI_DISK="$ROOT/src/xros-installer-diamond/qml/screens/Disk.qml"
+GUI_USER="$ROOT/src/xros-installer-diamond/qml/screens/User.qml"
+GUI_REGION="$ROOT/src/xros-installer-diamond/qml/screens/Region.qml"
+BRIDGE="$ROOT/src/xros-installer-diamond/bridge.py"
+CLI_MAIN="$ROOT/src/xros-cli/src/main.rs"
+CLI_INFO="$ROOT/src/xros-cli/src/info.rs"
+if grep -Fq 'selectedPart === selectedEfi' "$GUI_DISK" \
+  && grep -Fq 'selectedPart = ""' "$GUI_DISK" \
+  && grep -Fq 'selectedEfi = ""' "$GUI_DISK" \
+  && grep -Fq 'enabled: confirmAvailable()' "$GUI_DISK" \
+  && grep -Fq 'function confirmAvailable()' "$GUI_DISK"; then
+  ok "T6a: manual root/EFI selections reject stale and identical paths"
+else
+  bad "T6a: manual root/EFI selections reject stale and identical paths"
+fi
+if grep -Fq 'hostnameValid' "$GUI_USER" \
+  && grep -Fq 'hostnameValid()' "$GUI_USER" \
+  && grep -Fq 'zones.indexOf(selectedZone) >= 0' "$GUI_REGION"; then
+  ok "T6b: GUI hostname and timezone use engine-compatible validation"
+else
+  bad "T6b: GUI hostname and timezone use engine-compatible validation"
+fi
+if grep -Fq 'return completed.returncode == 0' "$BRIDGE"; then
+  ok "T6c: setLiveKeymap checks setxkbmap return code"
+else
+  bad "T6c: setLiveKeymap checks setxkbmap return code"
+fi
+if grep -Fq 'vec!["-Syu"]' "$CLI_MAIN" \
+  && grep -Fq '/etc/os-release' "$CLI_INFO" \
+  && ! grep -Fq '/usr/share/xros/desktop' "$CLI_INFO" \
+  && grep -Fq 'XROS_DESKTOP' "$CLI_INFO" \
+  && grep -Fq 'XROS_BOOTLOADER' "$CLI_INFO"; then
+  ok "T6d: CLI uses full upgrade and installed metadata"
+else
+  bad "T6d: CLI uses full upgrade and installed metadata"
+fi
 
 echo "ИТОГ: PASS=$PASS FAIL=$FAIL SKIP=$SKIPPED (упавшие:$FAILED_NAMES)"
 [[ "$FAIL" == "0" ]] && exit 0 || exit 1

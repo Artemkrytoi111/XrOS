@@ -36,18 +36,19 @@ LOGO = "/usr/share/xros/xros-logo.png"
 AUTOSTART = os.path.expanduser("~/.config/autostart/xros-welcome.desktop")
 # Diamond — основной установщик (QML); Rust GUI — запасной, если
 # Diamond по какой-то причине отсутствует в системе.
-INSTALLER_CANDIDATES = ("/usr/local/bin/xros-installer-diamond",
-                        "/usr/local/bin/xros-install-gui")
+INSTALLER_CANDIDATES = (("/usr/local/bin/xros-installer-diamond", "diamond"),
+                        ("/usr/local/bin/xros-install-gui", "rust"))
 
 
 def _pick_installer():
-    for path in INSTALLER_CANDIDATES:
+    for path, mode in INSTALLER_CANDIDATES:
         if os.path.exists(path):
-            return path
-    return INSTALLER_CANDIDATES[0]
+            return mode
+    return INSTALLER_CANDIDATES[0][1]
 
 
 INSTALLER = _pick_installer()
+LAUNCHER = "/usr/local/bin/xros-installer-launcher"
 
 ACCENT = "#8b00ff"
 ACCENT_LIGHT = "#b66aff"
@@ -178,7 +179,7 @@ class WelcomeWindow(QMainWindow):
 
     def launch_installer(self):
         try:
-            subprocess.Popen([INSTALLER])
+            subprocess.Popen(["/usr/bin/sudo", LAUNCHER, INSTALLER])
         except OSError:
             # Бинарь установщика отсутствует (например, в системе
             # без графики): показать предупреждение, а не падать
@@ -187,7 +188,7 @@ class WelcomeWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 self.t["install"],
-                "Не удалось запустить установщик:\n" + INSTALLER,
+                "Не удалось запустить установщик:\n" + LAUNCHER + " " + INSTALLER,
             )
             return
         self.close()

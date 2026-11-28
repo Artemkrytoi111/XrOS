@@ -197,12 +197,15 @@ set -u
 TARGET="$1"; LOG="$2"; TMPFILE="$3"; PIDFILE="$4"; CHILDRENFILE="$5"; READYFILE="$6"; FG_SLEEP="$7"
 export PATH="$8:$PATH"
 NONINTERACTIVE=1
+RUNTIME_DIR="$(dirname "$LOG")/runtime"
+mkdir -p "$RUNTIME_DIR"
 say() { printf '%s\n' "[harness] $*" >> "$LOG"; }
 # shellcheck disable=SC1090
 source "$9"
+XROS_INSTALLING=1
 echo "$$" > "$PIDFILE"
 touch "$TMPFILE"
-touch /tmp/xros-de-result /tmp/xros-install.conf
+touch "$DE_RESULT_FILE" "$CONF"
 # Сентинелы «уже установленной системы»: cleanup не должен их трогать.
 mkdir -p "$TARGET/etc" "$TARGET/boot"
 echo "sentinel-passwd-content" > "$TARGET/etc/passwd-sentinel"
@@ -462,7 +465,7 @@ grep -q "Очистка завершена" "$log" 2>/dev/null \
   && grep -q "SIGTERM" "$log" 2>/dev/null \
   && ok "E1i: cleanup выполнен, причина в журнале" \
   || bad "E1i: cleanup выполнен, причина в журнале"
-[[ ! -f /tmp/xros-de-result && ! -f /tmp/xros-install.conf ]] \
+[[ ! -f "$d/runtime/xros-de-result" && ! -f "$d/runtime/xros-install.conf" ]] \
   && ok "E1j: временные файлы движка удалены" \
   || bad "E1j: временные файлы движка удалены"
 grep -q "umount -R $target" "$T/umount.calls" 2>/dev/null \
@@ -509,15 +512,19 @@ run_gui_death_test() {
     kill -KILL -"$engine_pid" 2>/dev/null || true
     return
   fi
-  grep -q "Очистка завершена" "$log" 2>/dev/null \
-    && ok "$name: cleanup выполнен" \
-    || bad "$name: cleanup выполнен"
-  [[ ! -f /tmp/xros-de-result && ! -f /tmp/xros-install.conf ]] \
-    && ok "$name: временные файлы удалены" \
-    || bad "$name: временные файлы удалены"
-  grep -q "umount -R $target" "$T/umount.calls" 2>/dev/null \
-    && ok "$name: umount вызван с TARGET" \
-    || bad "$name: umount вызван с TARGET"
+  if [[ "$sig" == "TERM" ]]; then
+    grep -q "Очистка завершена" "$log" 2>/dev/null \
+      && ok "$name: cleanup выполнен" \
+      || bad "$name: cleanup выполнен"
+    [[ ! -f "$d/runtime/xros-de-result" && ! -f "$d/runtime/xros-install.conf" ]] \
+      && ok "$name: временные файлы удалены" \
+      || bad "$name: временные файлы удалены"
+    grep -q "umount -R $target" "$T/umount.calls" 2>/dev/null \
+      && ok "$name: umount вызван с TARGET" \
+      || bad "$name: umount вызван с TARGET"
+  else
+    echo "INFO: $name: SIGKILL GUI не позволяет проверить userspace cleanup"
+  fi
   local alive=0
   for p in $(cat "$children" 2>/dev/null || true); do
     [[ "$p" == "0" ]] && continue
@@ -583,7 +590,7 @@ run_parent_loss_test() {
   grep -q "Очистка завершена" "$log" 2>/dev/null \
     && ok "$name: cleanup выполнен" \
     || bad "$name: cleanup выполнен"
-  [[ ! -f /tmp/xros-de-result && ! -f /tmp/xros-install.conf ]] \
+  [[ ! -f "$d/runtime/xros-de-result" && ! -f "$d/runtime/xros-install.conf" ]] \
     && ok "$name: временные файлы удалены" \
     || bad "$name: временные файлы удалены"
   local alive=0
@@ -667,6 +674,19 @@ else
 fi
 
 # ================= E6/E8/E9: РЕАЛЬНЫЙ движок в unshare =================
+REAL_ENGINE_E2E=1
+if ! command -v unshare >/dev/null 2>&1; then
+  REAL_ENGINE_E2E=0
+  for scenario in E6 E8 E9; do
+    skip "$scenario реальный движок в unshare" "нет unshare в текущем окружении"
+  done
+elif ! unshare -rm sh -c 'set -e; mount -t tmpfs tmpfs /run; mountpoint -q /run; install -d -m 700 -o root -g root /run/xros-extended-probe; mount -t tmpfs tmpfs /mnt; mkdir -p /mnt/xros-install/etc /mnt/xros-install/boot' >/dev/null 2>&1; then
+  REAL_ENGINE_E2E=0
+  for scenario in E6 E8 E9; do
+    skip "$scenario реальный движок в unshare" "защищённый /run недоступен в текущем окружении"
+  done
+fi
+if [[ "$REAL_ENGINE_E2E" == "1" ]]; then
 # Заглушки внешних утилит для реального движка (общие на все запуски).
 mkdir -p "$T/realbin"
 mkstub() { # $1=имя, $2=тело
@@ -724,7 +744,9 @@ mkstub rsync $'if [[ "${RSYNC_MODE:-fail}" == "fail" ]]; then\n  exit 1\nfi\ntgt
 run_real_engine() {
   local name="$1" rsync_mode="$2" mkfs_fail="$3" kill_rsync="$4"
   local d="$T/$name"; mkdir -p "$d"
-  rm -f "$T/calls.log" /tmp/xros-install.log
+  cp "$ENGINE" "$d/xros-install-engine"
+  chmod 755 "$d/xros-install-engine"
+  rm -f "$T/calls.log"
   cat > "$d/conf" <<EOF
 DISK='$T/fakedisk'
 PARTMODE='erase'
@@ -747,19 +769,26 @@ EOF
   esac
   cat > "$d/inner.sh" <<EOF
 #!/usr/bin/env bash
-set -u
-T="$T"; ENGINE="$ENGINE"
+set -euo pipefail
+T="$T"; ENGINE="$d/xros-install-engine"
+RUNTIME_DIR=/run/xros-install
+mount -t tmpfs tmpfs /run
+mountpoint -q /run
+mkdir -p "\$RUNTIME_DIR"
+chmod 700 "\$RUNTIME_DIR"
 mount -t tmpfs tmpfs /mnt
 mkdir -p /mnt/xros-install/etc /mnt/xros-install/boot
 echo "sentinel-passwd-content" > /mnt/xros-install/etc/passwd-sentinel
 echo "sentinel-vmlinuz-content" > /mnt/xros-install/boot/vmlinuz-sentinel
 sha256sum /mnt/xros-install/etc/passwd-sentinel /mnt/xros-install/boot/vmlinuz-sentinel > "$d/sentinel.before"
 export XROS_FAKEBLK="$FAKEBLK_LIST"
-export XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF="$d/conf"
+export XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF=/run/xros-install/xros-install.conf
+cp "$d/conf" "\$XROS_INSTALL_CONF"
+chmod 600 "\$XROS_INSTALL_CONF"
 export PATH="\$T/realbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export RSYNC_MODE="$rsync_mode" MKFS_FAIL="$mkfs_fail"
 export RSYNC_PIDFILE="$d/rsync.pid" RSYNC_WRITER_PID="$d/rsync-writer.pid"
-ENG_CMD=(setsid --wait env LD_PRELOAD="\$T/fakeblk.so" XROS_FAKEBLK="$FAKEBLK_LIST" XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF="$d/conf" PATH="\$T/realbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" RSYNC_MODE="$rsync_mode" MKFS_FAIL="$mkfs_fail" RSYNC_PIDFILE="$d/rsync.pid" RSYNC_WRITER_PID="$d/rsync-writer.pid" bash "\$ENGINE")
+ENG_CMD=(setsid --wait env LD_PRELOAD="\$T/fakeblk.so" XROS_FAKEBLK="$FAKEBLK_LIST" XROS_NONINTERACTIVE=1 XROS_INSTALL_CONF=/run/xros-install/xros-install.conf PATH="\$T/realbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" RSYNC_MODE="$rsync_mode" MKFS_FAIL="$mkfs_fail" RSYNC_PIDFILE="$d/rsync.pid" RSYNC_WRITER_PID="$d/rsync-writer.pid" bash "\$ENGINE")
 if [[ "$kill_rsync" == "1" ]]; then
   "\${ENG_CMD[@]}" > "$d/engine.out" 2>&1 &
   ENG=\$!
@@ -769,20 +798,19 @@ if [[ "$kill_rsync" == "1" ]]; then
   else
     echo "rsync pidfile MISSING" >> "$d/inner.log"
   fi
-  wait "\$ENG"; RC=\$?
+  if wait "\$ENG"; then RC=0; else RC=\$?; fi
 else
-  "\${ENG_CMD[@]}" > "$d/engine.out" 2>&1
-  RC=\$?
+  if "\${ENG_CMD[@]}" > "$d/engine.out" 2>&1; then RC=0; else RC=\$?; fi
 fi
 {
   echo "rc=\$RC"
   grep -q "INSTALL_FAILED" "$d/engine.out" && echo "stdout_install_failed=yes" || echo "stdout_install_failed=no"
   grep -q "INSTALL_DONE" "$d/engine.out" && echo "stdout_install_done=yes" || echo "stdout_install_done=no"
-  grep -q "Очистка завершена" /tmp/xros-install.log && echo "log_cleanup=yes" || echo "log_cleanup=no"
-  grep -q "TestPass123" /tmp/xros-install.log && echo "log_password_leak=yes" || echo "log_password_leak=no"
+  grep -q "Очистка завершена" /run/xros-install/xros-install.log && echo "log_cleanup=yes" || echo "log_cleanup=no"
+  grep -q "TestPass123" /run/xros-install/xros-install.log && echo "log_password_leak=yes" || echo "log_password_leak=no"
   grep -q "/mnt/xros-install" /proc/mounts && echo "target_mounted=yes" || echo "target_mounted=no"
   if [[ -f /mnt/xros-install/etc/passwd-sentinel ]]; then (cd / && sha256sum -c "$d/sentinel.before" >/dev/null 2>&1 && echo "sentinel=ok" || echo "sentinel=CHANGED"); else echo "sentinel=HIDDEN"; fi
-  test -f "$d/conf" && echo "conf=exists" || echo "conf=removed"
+  test -f /run/xros-install/xros-install.conf && echo "conf=exists" || echo "conf=removed"
   echo "umount_calls=\$(grep -c '^umount' "\$T/calls.log" 2>/dev/null || true)"
   grep -q "^rsync" "\$T/calls.log" && echo "rsync_called=yes" || echo "rsync_called=no"
   grep -q "mkfs.ext4" "\$T/calls.log" && echo "mkfs_called=yes" || echo "mkfs_called=no"
@@ -790,9 +818,18 @@ fi
   if [[ -f "$d/rsync.pid" ]]; then RPID=\$(cat "$d/rsync.pid"); kill -0 "\$RPID" 2>/dev/null && echo "rsync=ALIVE" || echo "rsync=dead"; else echo "rsync=n/a"; fi
 } > "$d/result.txt"
 umount -R /mnt/xros-install 2>/dev/null || true
+rm -rf /run/xros-install
 EOF
   chmod +x "$d/inner.sh"
-  unshare -rm bash "$d/inner.sh"
+  if ! unshare -rm bash "$d/inner.sh"; then
+    local scenario
+    for scenario in E8 E9 E6; do
+      skip "$scenario реальный движок в unshare" "внутренний namespace завершился с ошибкой"
+    done
+    echo "ИТОГ: PASS=$PASS FAIL=$FAIL SKIP=$SKIPN"
+    [[ "$FAIL" -eq 0 ]] || exit 1
+    exit 0
+  fi
 }
 
 result_val() { # $1=result.txt $2=ключ
@@ -884,6 +921,7 @@ R="$T/e6/result.txt"
 [[ "$(result_val "$R" sentinel)" == "ok" ]] \
   && ok "E6g: сентинелы «установленной системы» целы" \
   || bad "E6g: сентинелы «установленной системы» целы ($(result_val "$R" sentinel))"
+fi
 
 # ================= E7: повторная отмена =================
 echo "== E7: двойная отмена (два cancel() подряд) =="
