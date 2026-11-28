@@ -26,7 +26,7 @@ options=('!debug' '!strip')
 source=('xros-install'
         'xros-install-gui'
          'xros-installer-launcher')
-sha256sums=('7d68f8832cc761e569f15e05a04be1627e8fc502b62f67a65e39a1b0128d096f'
+sha256sums=('1b6b3dadf00b4967d7bf906216a79cd56d32c64d9ea3571d1327b9df0e48cc0d'
             '96df68ea45f1a6f420735f562e9ff73492c8ad5def5e13704b7b0cbb914a4106'
              '98ac1156161ccf31e708b6189aca4a0aef7e4ad5f468f3bbe6ea8b70ae380fd6')
 # Diamond (каталог, НЕ в source=): makepkg не умеет каталог как источник
