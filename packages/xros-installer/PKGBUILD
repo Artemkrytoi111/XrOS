@@ -27,7 +27,7 @@ source=('xros-install'
         'xros-install-gui'
          'xros-installer-launcher')
 sha256sums=('7d68f8832cc761e569f15e05a04be1627e8fc502b62f67a65e39a1b0128d096f'
-            'cf3cdd2e729580b318b6e0a6511f5eb700e76395dcf7aa073315de140545cb8c'
+            '96df68ea45f1a6f420735f562e9ff73492c8ad5def5e13704b7b0cbb914a4106'
              '98ac1156161ccf31e708b6189aca4a0aef7e4ad5f468f3bbe6ea8b70ae380fd6')
 # Diamond (каталог, НЕ в source=): makepkg не умеет каталог как источник
 # («not found in the build directory») — staged-каталог лежит рядом

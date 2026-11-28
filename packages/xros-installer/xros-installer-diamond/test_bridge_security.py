@@ -120,7 +120,7 @@ class TestSecureCreate(unittest.TestCase):
             self.assertTrue(os.path.isfile(path))
 
     @unittest.skipIf(not IS_POSIX, "symlink-атака — POSIX-only")
-    def test_symlink_is_not_followed(self):
+    def test_symlink_is_rejected_without_touching_target(self):
         with _TmpDir() as d:
             victim = os.path.join(d, "victim")
             with open(victim, "w") as f:
@@ -128,14 +128,10 @@ class TestSecureCreate(unittest.TestCase):
             link = os.path.join(d, "conf")
             os.symlink(victim, link)
             fd = bridge._secure_create(link)
-            # symlink удалён КАК СИМЛИНК, цель не затронута.
-            self.assertTrue(os.path.exists(victim))
+            self.assertIsNone(fd)
+            self.assertTrue(os.path.islink(link))
             with open(victim) as f:
                 self.assertEqual(f.read(), "secret")
-            self.assertIsNotNone(fd)
-            os.close(fd)
-            self.assertTrue(os.path.exists(link))
-            self.assertFalse(os.path.islink(link))
 
     def test_existing_regular_file_is_replaced(self):
         with _TmpDir() as d:

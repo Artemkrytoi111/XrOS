@@ -14,7 +14,7 @@ Item {
     property string detectedZone: ""
     property string nowText: ""
 
-    function validate() { return selectedZone !== "" }
+    function validate() { return zones.indexOf(selectedZone) >= 0 }
 
     Component.onCompleted: {
         zones = JSON.parse(bridge.timezonesJson())

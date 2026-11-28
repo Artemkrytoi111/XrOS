@@ -34,7 +34,7 @@ options=('!debug' '!strip')
 source=('xros'
         'xros-update.service'
         'xros-update.timer')
-sha256sums=('9c67cfdcc1b50998e05be1d0c9efd6d1325473731b8b7de6971ebe049954e1aa'
+sha256sums=('66ea4b964df6245b745ac95d8e10c8a98bde2ea8d18b6f50dfc052ec5c7aa9ae'
             '24d4960e4fa92535544403021bf41fa90623f57c7786b3fe52fbbb41c16fa7ac'
             '7fc4dd5f22bd065707f7eb1bfe6facffe8167e936b60b8bddc525d065a4c41d4')
 
