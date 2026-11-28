@@ -7,8 +7,8 @@
 iso_name="xros"
 iso_label="XROS_202611"
 iso_publisher="XrOS"
-iso_application="XrOS 1.0"
-iso_version="1.0"
+iso_application="XrOS 1.2beta"
+iso_version="1.2beta"
 install_dir="xros"
 bootmodes=('uefi.grub')
 # ВНИМАНИЕ: archiso 92 знает только три bootmode — bios.syslinux,
