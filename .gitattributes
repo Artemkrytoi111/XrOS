@@ -24,11 +24,8 @@ profiledef.sh text eol=lf
 # Скрипты, которые лежат в профиле/пакетах без расширения, у них их
 # собственные shebang: сохраняем LF, чтобы они исполнялись.
 profile/airootfs/usr/local/bin/* text eol=lf
-profile/airootfs/usr/local/bin/xros binary
-profile/airootfs/usr/local/bin/xros-install-gui binary
 packages/xros-installer/xros-install text eol=lf
-packages/xros-cli/xros binary
-packages/xros-installer/xros-install-gui binary
+packages/xros-cli/xros text eol=lf
 packages/xros-welcome/xros-welcome text eol=lf
 packages/xros-welcome/xros-welcome-gui text eol=lf
 src/xros-install text eol=lf

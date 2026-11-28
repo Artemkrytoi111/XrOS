@@ -98,7 +98,7 @@ blkid() {
   # R-18: настоящий blkid при ошибке доступа пишет в stderr
   # (проверено: 'blkid: error: ...: Permission denied', rc=2).
   [[ -n "$BLKID_STDERR" ]] && echo "$BLKID_STDERR" >&2
-  local d="${*: -1}" _type
+  local d="${@: -1}" _type
   _type="$(printf '%s\n' "$BLKID_TABLE" | awk -v dev="$d" '$1==dev {print $2; exit}')"
   if [[ -n "$_type" ]]; then printf '%s\n' "$_type"; return 0; fi
   return 2
@@ -326,7 +326,7 @@ else
 fi
 
 # ================= D. РЕАЛЬНЫЙ движок в unshare ============================
-if command -v gcc >/dev/null 2>&1 && command -v unshare >/dev/null 2>&1 && unshare -rm true 2>/dev/null; then
+if command -v gcc >/dev/null 2>&1 && command -v unshare >/dev/null 2>&1; then
   # LD_PRELOAD-шим (та же идея, что в test-child-process-extended.sh).
   # XROS_FAKEBLK — список путей через ':' (диск + его разделы):
   # stat() подменяет их тип на блочное устройство, чтобы [[ -b ]]
@@ -579,7 +579,7 @@ EOF
   [[ "$(result_val "$R" sgdisk_called)" == "no" ]] && ok "e2e R-18 head-fail: sgdisk НЕ вызван" || bad "e2e R-18 head-fail: sgdisk НЕ вызван"
   [[ "$(result_val "$R" mkfs_called)" == "no" ]] && ok "e2e R-18 head-fail: mkfs НЕ вызван" || bad "e2e R-18 head-fail: mkfs НЕ вызван"
 else
-  skip "e2e реальный движок в unshare" "нет gcc или unshare -rm не работает в этом окружении"
+  skip "e2e реальный движок в unshare" "нет gcc или unshare на этом хосте"
 fi
 
 # ================= E. Статика: защита и синхронность =======================

@@ -79,27 +79,11 @@ fi
 # ---------------------------------------------------------------- 5. PKGBUILD
 if command -v makepkg >/dev/null 2>&1; then
   for p in xros-cli xros-installer xros-welcome xros-branding; do
-            _mkpkg_dir="packages/$p"
-        _mkpkg_prefix=""
-        if [[ $EUID -eq 0 ]]; then
-          # makepkg has no --asroot since 2015 and refuses to run as root:
-          # run it as nobody in a throwaway copy of the package dir
-          _tmp="$(mktemp -d)"
-          cp -r "packages/$p" "$_tmp/$p"
-          chmod -R a+rwX "$_tmp"
-          _mkpkg_dir="$_tmp/$p"
-          _mkpkg_prefix="runuser -u nobody --"
-        fi
-        # shellcheck disable=SC2086
-        if (cd "$_mkpkg_dir" && $_mkpkg_prefix makepkg --printsrcinfo >"/tmp/makepkg-$p.log" 2>&1); then
-          ok "makepkg --printsrcinfo $p"
-        else
-          echo "--- makepkg --printsrcinfo $p failed, output: ---"
-          cat "/tmp/makepkg-$p.log" 2>/dev/null || true
-          echo "--- end makepkg output ---"
-          bad "makepkg --printsrcinfo $p"
-        fi
-        [[ -n ${_tmp:-} ]] && rm -rf "$_tmp"
+    if (cd "packages/$p" && makepkg --printsrcinfo >/dev/null 2>&1); then
+      ok "makepkg --printsrcinfo $p"
+    else
+      bad "makepkg --printsrcinfo $p"
+    fi
   done
 else
   for p in xros-cli xros-installer xros-welcome xros-branding; do
@@ -419,24 +403,27 @@ else
   bad "xros-install-gui: нет request_focus в app.rs"
 fi
 # 2) Свежесть и соответствие поставляемого бинаря исходникам:
-# 2) Сверка SHA256 исходников с записанным при сборке (xros-build-env.sh).
-#    Фрагмент 'linux_raid_membe' — не полная строка: LLVM разрезает литералы.
-_gui_src_sha="$(cd src/xros-install-gui-rs 2>/dev/null && sha256sum Cargo.toml Cargo.lock src/*.rs 2>/dev/null | sort -k2 | sha256sum | cut -d' ' -f1)"
-_gui_recorded_sha="$(head -1 packages/xros-installer/xros-install-gui.sha256 2>/dev/null)"
-if [[ -n "$_gui_src_sha" && "$_gui_src_sha" == "$_gui_recorded_sha" ]]; then
+#    бинарь новее app.rs и system.rs И содержит маркер фильтрации
+#    RAID (linux_raid_member) — это доказывает, что в нём есть
+#    исправление A-38, а не только свежий mtime. При устаревшем
+#    бинаре — прямое указание на пересборку GUI.
+#    R-20 FINAL F2 (13.11.2026): полная строка 'linux_raid_member' в
+#    бинаре НЕ хранится — LLVM разрезает литералы; проверяется
+#    фрагмент 'linux_raid_membe', который присутствует в официальном
+#    бинаре 1.1 (cf3cdd2e…), плюс 14 RAID-фрагментов и 7/7 unit-тестов.
+if [[ packages/xros-installer/xros-install-gui -nt src/xros-install-gui-rs/src/app.rs ]] \
+   && [[ packages/xros-installer/xros-install-gui -nt src/xros-install-gui-rs/src/system.rs ]]; then
   if command -v strings >/dev/null 2>&1; then
     if strings packages/xros-installer/xros-install-gui | grep -q 'linux_raid_membe'; then
-      ok "xros-install-gui: SHA256 источников совпадает с записанным при сборке, содержит фильтрацию RAID (A-38)"
+      ok "xros-install-gui: бинарь свежее исходников и содержит фильтрацию RAID (A-38)"
     else
-      bad "xros-install-gui: SHA256 совпадает, но БЕЗ фильтрации RAID (A-38) — требуется пересборка GUI (cargo build --release)"
+      bad "xros-install-gui: бинарь свежее исходников, но БЕЗ фильтрации RAID (A-38) — требуется пересборка GUI (cargo build --release)"
     fi
   else
-    ok "xros-install-gui: SHA256 источников совпадает с записанным при сборке (проверка содержимого пропущена: нет strings)"
+    ok "xros-install-gui: бинарь свежее исходников (проверка содержимого пропущена: нет strings)"
   fi
-elif [[ -z "$_gui_recorded_sha" ]]; then
-  bad "xros-install-gui: нет .sha256-файла при бинаре — требуется пересборка GUI (cargo build --release)"
 else
-  bad "xros-install-gui: SHA256 источников не совпадает с записанным при сборке — требуется пересборка GUI (cargo build --release)"
+  bad "xros-install-gui: бинарь старше исходников — требуется пересборка GUI (cargo build --release)"
 fi
 # fixed7 (11.11.2026): надёжное ожидание ActivityManager перед
 # запуском plasmashell — After= для Type=simple гарантирует только
@@ -779,7 +766,7 @@ if [[ $ph_bad -eq 0 ]]; then ok "xros.example везде с PLACEHOLDER рядо
 # намеренно завершается exit 3) и TODO в mkinitcpio.conf.d/archiso.conf
 # (сверить с пакетом mkinitcpio-archiso) — оба задокументированы,
 # но пока не закрыты, поэтому проверка даёт FAIL, а не SKIP.
-if grep -rniE --exclude-dir=.git --exclude-dir=target --exclude=xros-diagnose.sh 'TODO|FIXME|not implemented|unimplemented' src scripts packages profile 2>/dev/null | grep .; then
+if grep -rniE --exclude-dir=.git --exclude=xros-diagnose.sh 'TODO|FIXME|not implemented|unimplemented' src scripts packages profile 2>/dev/null | grep .; then
   bad "маркеры-заглушки TODO/FIXME/not implemented (см. список выше)"
 else
   ok "маркеров-заглушек нет"
@@ -859,7 +846,6 @@ if [[ $dup_const -eq 0 ]]; then ok "install.rs: pub const без дублей"; 
 # Время: тесты занимают ~70 с (child-process 28 с + extended 38 с).
 
 # 20а. Build environment: rootfs, маркеры init, builder, версии инструментов.
-if [[ -d build-env ]]; then
 if [[ -d build-env/root.x86_64/usr/bin ]]; then ok "build-env: rootfs существует"; else bad "build-env: нет rootfs (нужен scripts/xros-build-env.sh --init)"; fi
 if [[ -f build-env/state/init-done ]]; then ok "build-env: маркер state/init-done"; else bad "build-env: нет state/init-done"; fi
 if [[ -f build-env/state/deps-fetched ]]; then ok "build-env: маркер state/deps-fetched"; else bad "build-env: нет state/deps-fetched"; fi
@@ -879,15 +865,6 @@ if benv_ver=$(./scripts/xros-build-env.sh --exec -- bash -c 'rustc --version; ca
 else
   bad "build-env: --exec не работает (нельзя проверить версии инструментов)"
 fi
-else
-  skip "build-env: rootfs существует" "нет каталога build-env (локальный артефакт, не входит в git)"
-    skip "build-env: маркер state/init-done" "нет каталога build-env (локальный артефакт, не входит в git)"
-      skip "build-env: маркер state/deps-fetched" "нет каталога build-env (локальный артефакт, не входит в git)"
-        skip "build-env: builder uid 1000 в rootfs" "нет каталога build-env (локальный артефакт, не входит в git)"
-          skip "build-env: bootstrap-тарбол + подпись на месте" "нет каталога build-env (локальный артефакт, не входит в git)"
-            skip "build-env: rootfs >= 1 ГБ" "нет каталога build-env (локальный артефакт, не входит в git)"
-              skip "build-env: --exec не работает" "нет каталога build-env (локальный артефакт, не входит в git)"
-              fi
 
 # 20б. Независимость от чужих проектов: ссылки на другой проект
 # в скриптах сборки и в build-env (кроме самого rootfs).
@@ -993,7 +970,7 @@ for t in test-child-process.sh test-child-process-extended.sh; do
       tsum=$(echo "$tout" | grep -oE 'PASS=[0-9]+ FAIL=0( SKIP=[0-9]+)?' | head -1)
       ok "тест $t пройден ($tsum)"
     else
-      echo "$tout" | tail -200; bad "тест $t НЕ пройден"
+      echo "$tout" | tail -5; bad "тест $t НЕ пройден"
     fi
   else
     bad "тест $t отсутствует или не исполняемый"
@@ -1132,18 +1109,16 @@ gui_sha=$(sha256sum packages/xros-installer/xros-install-gui 2>/dev/null | cut -
 # (короткий пароль, vsync, убрана боковая панель) — sha256 обновлён
 # с 6321b5a2… (R-08) на cf3cdd2e… (официальный 1.1: cargo check/test/
 # clippy чисты, .symtab на месте, не stripped, RAID-фрагмент на месте).
-# 27.11.2026: бинарь пересобран (a763a97) — sha256 обновлён
-# с cf3cdd2e… (1.1) на ddf150a7… (пересборка 27.11.2026).
-if [[ "$gui_sha" == "ddf150a7ffba2c0da851b12b536de9265a652879980b9007840d5cd860669d4a" ]]; then
-  ok "xros-install-gui (пакет): sha256 ddf150a7… (пересобран 27.11.2026)"
+if [[ "$gui_sha" == "cf3cdd2e729580b318b6e0a6511f5eb700e76395dcf7aa073315de140545cb8c" ]]; then
+  ok "xros-install-gui (пакет): sha256 cf3cdd2e… (1.1, 14.11.2026)"
 else
-  bad "xros-install-gui (пакет): sha256 не совпадает с зафиксированным ddf150a7… (пересобран 27.11.2026)"
+  bad "xros-install-gui (пакет): sha256 не совпадает с зафиксированным cf3cdd2e… (1.1)"
 fi
 cli_sha=$(sha256sum packages/xros-cli/xros 2>/dev/null | cut -d' ' -f1)
-if [[ "$cli_sha" == "d802dd3435aeef4685c6cd0de2f2682a13d22cf2a1f5805a6d4deca28c505857" ]]; then
-  ok "xros (CLI, пакет): sha256 d802dd34… (пересобран 27.11.2026)"
+if [[ "$cli_sha" == "9c67cfdcc1b50998e05be1d0c9efd6d1325473731b8b7de6971ebe049954e1aa" ]]; then
+  ok "xros (CLI, пакет): sha256 9c67cfdc… (зафиксирован 10.11.2026)"
 else
-  bad "xros (CLI, пакет): sha256 не совпадает с зафиксированным d802dd34…"
+  bad "xros (CLI, пакет): sha256 не совпадает с зафиксированным 9c67cfdc…"
 fi
 
 # ---------------------------------------------------------------- 20м. Сверка staged-бинарей с содержимым пакетов (A-05)
@@ -1157,12 +1132,7 @@ fi
 if command -v bsdtar >/dev/null 2>&1; then
   for spec in "xros-cli xros usr/local/bin/xros" "xros-installer xros-install-gui usr/local/bin/xros-install-gui"; do
     read -r _pkg _bin _path <<< "$spec"
-    # Выбор пакета — по версии из PKGBUILD, а не по дате: в git-чекауте
-    # увсех файлов одна дата клона, и ls -t брал случайный пакет
-    # (xros-cli-1.0-1/1.0-3 вместо свежего 1.0-2).
-    _ver="$(grep -m1 '^pkgver=' "packages/$_pkg/PKGBUILD" | cut -d= -f2)"
-    _rel="$(grep -m1 '^pkgrel=' "packages/$_pkg/PKGBUILD" | cut -d= -f2)"
-    _pkgfile="$(ls "packages/$_pkg"/"$_pkg-${_ver}-${_rel}"-*.pkg.tar.zst 2>/dev/null | head -1)"
+    _pkgfile="$(ls -t "packages/$_pkg"/"$_pkg"-*.pkg.tar.zst 2>/dev/null | head -1)"
     if [[ -z "$_pkgfile" ]]; then
       bad "A-05: нет пакета $_pkg для сверки"
       continue

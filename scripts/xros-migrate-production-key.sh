@@ -123,7 +123,7 @@ cp -a "${SNAP_DIR}/xros.db.sig" "${BACKUP}/snapshot/" 2>/dev/null || true
 cp -a "${SNAP_DIR}/xros.files.sig" "${BACKUP}/snapshot/" 2>/dev/null || true
 for f in "${PUBKEY_FILES[@]}"; do cp -a "$f" "${BACKUP}/pubkey/" || fail "backup: нет $f"; done
 for f in "${FPR_FILES[@]}"; do cp -a "$f" "${BACKUP}/configs/" || fail "backup: нет $f"; done
-( cd "$BACKUP" && find . -type f ! -name SHA256SUMS | sort | xargs sha256sum > SHA256SUMS )
+( cd "$BACKUP" && sha256sum $(find . -type f ! -name SHA256SUMS | sort) > SHA256SUMS )
 sha256sum -c "${BACKUP}/SHA256SUMS" >/dev/null || fail "backup: проверка SHA256SUMS не прошла"
 log "Backup создан: ${BACKUP} (SHA256SUMS OK)"
 echo "Backup: ${BACKUP}" >> "$JOURNAL"

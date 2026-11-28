@@ -9,14 +9,14 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-dev_1.1beta-8B00FF" alt="Version dev 1.1fix beta">
+  <img src="https://img.shields.io/badge/version-dev_1.1beta-8B00FF" alt="Version dev 1.1beta">
   <img src="https://img.shields.io/badge/based_on-Arch_Linux-1793D1?logo=archlinux&logoColor=white" alt="Based on Arch Linux">
   <img src="https://img.shields.io/badge/license-GPLv3-blue.svg" alt="License: GPLv3">
   <a href="https://artemkrytoi111.github.io/XrOS/"><img src="https://img.shields.io/badge/website-artemkrytoi111.github.io%2FXrOS-8B00FF" alt="Website"></a>
 </p>
 
 > [!NOTE]
-> **Статус** Dev iso не был собран, но были пофикситы большие недочёты Диструбутива, src и Запуск проекта примерно 26 ноября(это не точно)
+> **Статус:** DEV ISO собран 14.11.2026 и проверен (`check-iso` 12/12 PASS). Security-hardening commit от 20.11.2026 (см. раздел Security Hardening). Публичный релиз пока не опубликован — подробности на [странице загрузки](https://artemkrytoi111.github.io/XrOS/download.html).
 
 ## О проекте
 

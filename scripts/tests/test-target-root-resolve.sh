@@ -160,9 +160,7 @@ run_a "A14: попытка выйти за пределы цели" 0 no 'ln -s 
 run_b() {
   local id="$1" want_rc="$2"
   local d="$T/tgt-b-$id"
-  rm -rf "$d"; mkroot "$d"
-  # shellcheck disable=SC2034  # TARGET читается движком (xros_verify_default_target)
-  TARGET="$d"
+  rm -rf "$d"; mkroot "$d"; TARGET="$d"
   eval "$3"
   ( xros_verify_default_target "multi-user.target" >>"$LOG" 2>&1 ); local rc=$?
   if [[ "$rc" == "$want_rc" ]]; then ok "$id (rc=$rc)"; else bad "$id want rc=$want_rc got rc=$rc"; fi

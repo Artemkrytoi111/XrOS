@@ -1,4 +1,3 @@
-# shellcheck shell=bash disable=SC2034,SC2154
 # XrOS — пакет xros-welcome: окно приветствия (PyQt6) + автостарт.
 # Файлы-источники лежат РЯДОМ с PKGBUILD:
 # их кладёт туда этап сборки (scripts/build.sh) из актуальных

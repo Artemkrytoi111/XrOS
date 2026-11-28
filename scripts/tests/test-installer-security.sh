@@ -148,8 +148,7 @@ grep -Fq 'mount "$ROOT_PART" "$TARGET" || { say "ОШИБКА' "$ENGINE" \
   && ok "T0a5: mount корня с проверкой" || bad "T0a5: mount корня с проверкой"
 grep -Fq 'mount "$EFI_PART" "$TARGET/boot/efi" || { say "ОШИБКА' "$ENGINE" \
   && ok "T0a6: mount EFI с проверкой" || bad "T0a6: mount EFI с проверкой"
-grep -Fq '/ "$TARGET"/ >>"$LOG" 2>&1 &' "$ENGINE" \
-  && grep -Fq 'wait "$XROS_RSYNC_PID" || { say "ОШИБКА: копирование живой системы' "$ENGINE"\
+grep -Fq '/ "$TARGET"/ >>"$LOG" 2>&1 || { say "ОШИБКА: копирование живой системы' "$ENGINE" \
   && ok "T0a7: rsync с проверкой" || bad "T0a7: rsync с проверкой"
 grep -Fq 'cp "$KERN_SRC/vmlinuz-linux" "$TARGET/boot/vmlinuz-linux" || { say "ОШИБКА' "$ENGINE" \
   && ok "T0a8: cp ядра с проверкой" || bad "T0a8: cp ядра с проверкой"

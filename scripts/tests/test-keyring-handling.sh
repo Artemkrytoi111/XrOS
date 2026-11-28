@@ -52,8 +52,8 @@ grep -q 'pacman-key --populate archlinux не удался в установле
   || bad "R-07: --populate — фатальная ошибка"
 
 # ---------- e2e: реальный движок в unshare ----------
-if ! command -v gcc >/dev/null 2>&1 || ! command -v unshare >/dev/null 2>&1 || ! unshare -rm true 2>/dev/null; then
-  skip "e2e реальный движок в unshare" "нет gcc или unshare -rm не работает в этом окружении"
+if ! command -v gcc >/dev/null 2>&1 || ! command -v unshare >/dev/null 2>&1; then
+  skip "e2e реальный движок в unshare" "нет gcc или unshare на этом хосте"
   echo "ИТОГ: PASS=$PASS FAIL=$FAIL SKIP=$SKIPN"
   [[ "$FAIL" -eq 0 ]] || exit 1
   exit 0

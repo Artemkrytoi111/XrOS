@@ -833,11 +833,7 @@ do_build_rust() {
       log "возвращаю в проект: бинарь -> $stage ..."
       run_in_rootfs root -- bash -c 'cp "/home/builder/xros-build/'"$name"'/'"$target_dir"'/release/'"$bin"'" "/xros/'"$stage"'"' \
         || die "не удалось вернуть артефакты $crate в проект"
-      # Хеш источников нужен xros-diagnose.sh для проверки свежести бинаря.
-      local src_sha
-      src_sha="$(run_in_rootfs root -- bash -c 'cd /xros/'"$crate"' && sha256sum Cargo.toml Cargo.lock src/*.rs 2>/dev/null | sort -k2 | sha256sum | cut -d" " -f1')"
-      run_in_rootfs root -- bash -c 'printf "%s\n" '"$src_sha"' > "/xros/'"$stage"'.sha256"'
-      log "готово: $crate -> $PROJECT/$stage (src-sha256: ${src_sha:0:16}...)"
+      log "готово: $crate -> $PROJECT/$stage"
     fi
   done
   touch "$DEPS_MARKER"

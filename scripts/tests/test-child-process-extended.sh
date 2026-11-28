@@ -52,11 +52,6 @@ FAILED_NAMES=""
 ok()   { PASS=$((PASS+1)); echo "PASS: $1"; }
 bad()  { FAIL=$((FAIL+1)); FAILED_NAMES="$FAILED_NAMES $1"; echo "FAIL: $1"; }
 skip() { SKIPN=$((SKIPN+1)); echo "SKIP: $1"; }
-# Пробы окружения: E6/E8/E9 нужен unshare -rm, проверка зомби — systemd как PID 1.
-CAN_UNSHARE=0
-if unshare -rm true 2>/dev/null; then CAN_UNSHARE=1; fi
-IS_SYSTEMD_PID1=0
-[[ "$(cat /proc/1/comm 2>/dev/null)" == "systemd" ]] && IS_SYSTEMD_PID1=1
 
 wait_gone() {
   local pid="$1" timeout="$2" i=0 st
@@ -223,10 +218,8 @@ sleep 0.3
 GRANDCHILD=$(ps -o pid= --ppid "$CHILD2" 2>/dev/null | tr -d ' ' | head -1)
 printf '%s %s %s %s\n' "$CHILD1" "$CHILD2" "${GRANDCHILD:-0}" "$WRITER" > "$CHILDRENFILE"
 echo ready > "$READYFILE"
-# Долгая внешняя команда — как rsync в run_install: в фоне + wait, чтобы
-# ловушка срабатывала сразу. На переднем плане bash 5.3 теряет отложенную
-# ловушку, если команду убивает тот же SIGTERM (e2/e3 в CI на Arch).
-sleep "$FG_SLEEP" & wait "$!"
+# Внешняя команда на переднем плане — как rsync в run_install.
+sleep "$FG_SLEEP"
 HARNESS_EOF
 chmod +x "$T/engine-harness2.sh"
 
@@ -511,10 +504,8 @@ run_gui_death_test() {
   wait_gone "$sim_pid" 5 || { bad "$name: GUI не умер от SIG$sig"; }
   if wait_gone "$engine_pid" 10; then
     ok "$name: движок завершён за <=10 с после SIG$sig GUI (PDEATHSIG)"
-    echo "DIAG $name: движок умер сам за <=10 с (без fallback SIGKILL)"
   else
     bad "$name: движок завершён за <=10 с после SIG$sig GUI (PDEATHSIG)"
-    echo "DIAG $name: движок НЕ умер за 10 с — fallback SIGKILL группе"
     kill -KILL -"$engine_pid" 2>/dev/null || true
     return
   fi
@@ -524,11 +515,6 @@ run_gui_death_test() {
   [[ ! -f /tmp/xros-de-result && ! -f /tmp/xros-install.conf ]] \
     && ok "$name: временные файлы удалены" \
     || bad "$name: временные файлы удалены"
-  if ! grep -q "Очистка завершена" "$log" 2>/dev/null; then
-    echo "--- DIAG $name engine.log ---"
-    cat "$log" 2>/dev/null || echo "(лог пуст или отсутствует)"
-    echo "--- DIAG $name end engine.log ---"
-  fi
   grep -q "umount -R $target" "$T/umount.calls" 2>/dev/null \
     && ok "$name: umount вызван с TARGET" \
     || bad "$name: umount вызван с TARGET"
@@ -589,9 +575,7 @@ run_parent_loss_test() {
     kill -KILL -"$engine_pid" 2>/dev/null || true
     return
   fi
-  if [[ "$IS_SYSTEMD_PID1" == "0" ]]; then
-    skip "$name: движок полностью исчез из /proc (без зомби) — PID 1 не systemd, зомби некому подобрать (контейнер)"
-  elif wait_vanished "$engine_pid" 5; then
+  if wait_vanished "$engine_pid" 5; then
     ok "$name: движок полностью исчез из /proc (без зомби)"
   else
     bad "$name: движок полностью исчез из /proc (без зомби)"
@@ -817,9 +801,6 @@ result_val() { # $1=result.txt $2=ключ
 
 # ================= E8: ошибка копирования (rsync -> 1) =================
 echo "== E8: ошибка во время копирования (реальный движок, rsync=1) =="
-if [[ "$CAN_UNSHARE" == "0" ]]; then
-  skip "E8a–E8h реальный движок в unshare -rm: unshare недоступен в этом окружении (контейнер)"
-else
 run_real_engine "e8" "fail" 0 0
 R="$T/e8/result.txt"
 [[ "$(result_val "$R" rc)" == "1" ]] \
@@ -847,13 +828,9 @@ uc=$(result_val "$R" umount_calls); uc=${uc:-0}
 [[ "$uc" -ge 2 ]] \
   && ok "E8h: umount вызван >=2 раз (до разметки + cleanup), вызовов: $uc" \
   || bad "E8h: umount вызван >=2 раз (до разметки + cleanup), вызовов: $uc"
-fi
 
 # ================= E9: ошибка подготовки разделов (mkfs -> 1) =================
 echo "== E9: ошибка во время подготовки разделов (реальный движок, mkfs=1) =="
-if [[ "$CAN_UNSHARE" == "0" ]]; then
-  skip "E9a–E9h реальный движок в unshare -rm: unshare недоступен в этом окружении (контейнер)"
-else
 run_real_engine "e9" "fail" 1 0
 R="$T/e9/result.txt"
 [[ "$(result_val "$R" rc)" == "1" ]] \
@@ -881,13 +858,9 @@ uc=$(result_val "$R" umount_calls); uc=${uc:-0}
 [[ "$uc" -ge 2 ]] \
   && ok "E9h: umount вызван >=2 раз (до разметки + cleanup), вызовов: $uc" \
   || bad "E9h: umount вызван >=2 раз (до разметки + cleanup), вызовов: $uc"
-fi
 
 # ================= E6: гибель потомка (rsync убит извне) =================
 echo "== E6: гибель процесса-потомка (реальный движок, rsync SIGKILL) =="
-if [[ "$CAN_UNSHARE" == "0" ]]; then
-  skip "E6a–E6g реальный движок в unshare -rm: unshare недоступен в этом окружении (контейнер)"
-else
 run_real_engine "e6" "slow" 0 1
 R="$T/e6/result.txt"
 [[ "$(result_val "$R" rc)" == "1" ]] \
@@ -911,7 +884,6 @@ R="$T/e6/result.txt"
 [[ "$(result_val "$R" sentinel)" == "ok" ]] \
   && ok "E6g: сентинелы «установленной системы» целы" \
   || bad "E6g: сентинелы «установленной системы» целы ($(result_val "$R" sentinel))"
-fi
 
 # ================= E7: повторная отмена =================
 echo "== E7: двойная отмена (два cancel() подряд) =="

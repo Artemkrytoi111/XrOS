@@ -1,4 +1,3 @@
-# shellcheck shell=bash disable=SC2034,SC2154
 # XrOS — пакет xros-installer: консольный и графический установщики.
 # Графический бинарь собран заранее из src/xros-install-gui-rs
 # (cargo build --release --offline в chroot сборки: кэш cargo с eframe
@@ -24,8 +23,8 @@ depends=('bash' 'dialog' 'rsync' 'parted' 'dosfstools' 'e2fsprogs' 'btrfs-progs'
 options=('!debug' '!strip')
 source=('xros-install'
         'xros-install-gui')
-sha256sums=('acc840dd8e127b6ff0ba79e1ea3d65461269fdb03d1f8164965719b175f56cef'
-            'ddf150a7ffba2c0da851b12b536de9265a652879980b9007840d5cd860669d4a')
+sha256sums=('47ca723225161a370168793c9b47b5e49a10e9b361cc282a63e5ff8df1daa50b'
+            'cf3cdd2e729580b318b6e0a6511f5eb700e76395dcf7aa073315de140545cb8c')
 # Diamond (каталог, НЕ в source=): makepkg не умеет каталог как источник
 # («not found in the build directory») — staged-каталог лежит рядом
 # с PKGBUILD, prepare()/package() обращаются к нему через $startdir.
